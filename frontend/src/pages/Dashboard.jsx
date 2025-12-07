@@ -10,7 +10,8 @@ import NewTransactionForm from '../components/NewTransactionForm';
 import CategoryManager from '../components/CategoryManager';
 import Sidebar from '../components/Sidebar';
 import MoneyInput from '../components/MoneyInput';
-import logoImg from '../assets/logo.png'; // <--- Import da Imagem
+import MobileMenu from '../components/MobileMenu';
+import logoImg from '../assets/logo.png';
 import { 
   Home, BarChart3, Box, ShoppingCart, Settings, 
   Plus, ArrowUpCircle, ArrowDownCircle, CreditCard, Wallet, 
@@ -60,15 +61,16 @@ export default function Dashboard() {
       
       const now = new Date();
       const currentMonthTrans = allTrans.filter(t => {
-          const tDate = new Date(t.date);
-          return tDate.getMonth() === now.getMonth() && tDate.getFullYear() === now.getFullYear();
+        const tDate = new Date(t.date);
+        return tDate.getMonth() === now.getMonth() && tDate.getFullYear() === now.getFullYear();
       });
       setCurrentMonthTransactions(currentMonthTrans);
 
       const recent = allTrans
         .filter(t => {
+            // Filtro para mostrar apenas o primeiro lançamento de parcelas
             const match = t.description.match(/\((\d+)\/(\d+)\)/);
-            if (match) return match[1] === '1';
+            if (match) return match[1] === '1'; 
             return true;
         })
         .sort((a, b) => new Date(b.date) - new Date(a.date))
@@ -112,6 +114,10 @@ export default function Dashboard() {
     try {
         const finalValue = typeof paymentValue === 'string' ? parseFloat(paymentValue.replace(',', '.')) : paymentValue;
 
+        // Note: A lógica idealmente deveria ser feita via endpoint de ação no backend (API PATCH)
+        // para garantir a atomicidade da operação (Transação + Fatura + Limite).
+        // Aqui, a chamada é feita para o endpoint de transações e a atualização de limite/fatura é simulada/feita via patches separados.
+
         await api.post('/transactions/', {
             description: `Pagamento Fatura ${invoiceToPay.cardName}`,
             value: finalValue,
@@ -139,6 +145,7 @@ export default function Dashboard() {
 
   // --- HANDLERS RECORRÊNCIA ---
   const checkBillStatus = (billId) => {
+    // Procura se existe uma transação paga no mês corrente para esta conta recorrente
     const transaction = currentMonthTransactions.find(t => t.recurring_bill === billId);
     return transaction ? { paid: true, transaction } : { paid: false };
   };
@@ -198,14 +205,16 @@ export default function Dashboard() {
   };
 
   const totalBalance = accounts.reduce((acc, item) => acc + Number(item.balance), 0);
+  // Garante que o username está sendo usado para a saudação
+  const greetingName = user?.username || user?.email?.split('@')[0] || 'Visitante';
 
   return (
     <div className="flex w-screen h-screen overflow-hidden font-sans transition-colors duration-300
-                    bg-gray-50 text-gray-900 
-                    dark:bg-[#0F172A] dark:text-gray-100">
+                     bg-gray-50 text-gray-900 
+                     dark:bg-[#0F172A] dark:text-gray-100">
       
       <div className="hidden md:block h-full shrink-0 relative z-20">
-         <Sidebar />
+           <Sidebar />
       </div>
 
       <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden relative">
@@ -213,26 +222,19 @@ export default function Dashboard() {
             
             {/* HEADER */}
             <header className="w-full px-4 py-6 md:px-8 md:py-8 flex justify-between items-center shrink-0">
-                {/* LADO ESQUERDO: LOGO (MOBILE) + TEXTOS */}
                 <div className="flex items-center gap-4">
-                    {/* Logo só aparece no Mobile (md:hidden) */}
-                    <img 
-                        src={logoImg} 
-                        alt="Domo" 
-                        className="h-10 w-auto object-contain md:hidden"
-                    />
-                    
+                    <img src={logoImg} alt="Domo" className="h-10 w-auto object-contain md:hidden" />
                     <div>
+                        {/* AQUI É O AJUSTE PRINCIPAL: Usando greetingName, que prioriza username */}
                         <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-white truncate">
-                        Olá, {user?.username}!
+                            Olá, {greetingName}!
                         </h1>
                         <p className="text-gray-500 dark:text-gray-400 text-sm md:text-base">
-                        Visão geral das suas finanças
+                            Visão geral das suas finanças
                         </p>
                     </div>
                 </div>
                 
-                {/* LADO DIREITO: AÇÕES */}
                 <div className="flex items-center gap-3 shrink-0">
                     <button onClick={toggleTheme} className="p-2.5 rounded-full bg-white dark:bg-slate-800 shadow-sm border border-gray-200 dark:border-slate-700 text-yellow-500 dark:text-yellow-400">
                         {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
@@ -294,6 +296,12 @@ export default function Dashboard() {
                                 </span>
                             </div>
                         ))}
+                        
+                        {accounts.length === 0 && (
+                            <p className="text-gray-500 text-sm py-4 col-span-full text-center">
+                                Nenhuma conta cadastrada.
+                            </p>
+                        )}
                     </div>
                 </div>
 
@@ -307,72 +315,63 @@ export default function Dashboard() {
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 w-full">
                         {cards.map(card => {
-                             const avail = Number(card.limit_available);
-                             const total = Number(card.limit_total);
-                             const invoiceVal = card.invoice_info?.value || 0;
-                             const invoiceStatus = card.invoice_info?.status || 'Sem Fatura';
-                             const percentage = total === 0 ? 0 : Math.min(100, Math.max(0, (avail / total) * 100));
-                             
-                             return (
-                                <div key={card.id} className="rounded-2xl p-4 shadow-sm hover:shadow-md flex flex-col justify-between h-auto bg-white border border-gray-100 dark:bg-[#1E293B] dark:border-slate-700/50 transition-all">
-                                    
-                                    <div onClick={() => handleEditGeneric(card, 'CARD')} className="cursor-pointer flex justify-between items-start gap-3">
-                                        <div className="flex items-start gap-3">
-                                            <div className="p-2.5 rounded-full shrink-0 bg-purple-50 dark:bg-purple-900/20">
-                                                <CreditCard className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                                            </div>
-                                            <div>
-                                                <p className="font-bold text-sm text-gray-800 dark:text-gray-200 truncate max-w-[100px]">{card.name}</p>
-                                                <div className="flex items-center gap-1.5 mt-0.5 mb-2">
-                                                    {card.is_shared ? <Users size={12} className="text-blue-500"/> : <Lock size={12} className="text-gray-400"/>}
-                                                    <p className="text-[10px] text-gray-500">{card.is_shared ? 'Familiar' : 'Privada'}</p>
+                               const avail = Number(card.limit_available);
+                               const total = Number(card.limit_total);
+                               const invoiceVal = card.invoice_info?.value || 0;
+                               const invoiceStatus = card.invoice_info?.status || 'Sem Fatura';
+                               const percentage = total === 0 ? 0 : Math.min(100, Math.max(0, (avail / total) * 100));
+                               
+                               return (
+                                    <div key={card.id} className="rounded-2xl p-4 shadow-sm hover:shadow-md flex flex-col justify-between h-auto bg-white border border-gray-100 dark:bg-[#1E293B] dark:border-slate-700/50 transition-all">
+                                        <div onClick={() => handleEditGeneric(card, 'CARD')} className="cursor-pointer flex justify-between items-start gap-3">
+                                            <div className="flex items-start gap-3">
+                                                <div className="p-2.5 rounded-full shrink-0 bg-purple-50 dark:bg-purple-900/20">
+                                                    <CreditCard className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                                                </div>
+                                                <div>
+                                                    <p className="font-bold text-sm text-gray-800 dark:text-gray-200 truncate max-w-[100px]">{card.name}</p>
+                                                    <div className="flex items-center gap-1.5 mt-0.5 mb-2">
+                                                        {card.is_shared ? <Users size={12} className="text-blue-500"/> : <Lock size={12} className="text-gray-400"/>}
+                                                        <p className="text-[10px] text-gray-500">{card.is_shared ? 'Familiar' : 'Privada'}</p>
+                                                    </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                        <div className="text-right">
-                                            <span className="font-bold text-emerald-600 dark:text-emerald-400 block whitespace-nowrap text-sm">
-                                                R$ {avail.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                            </span>
-                                            <span className="text-[10px] text-gray-400 uppercase font-bold">Disponível</span>
-                                        </div>
-                                    </div>
-
-                                    <div className="w-full mt-2 mb-3">
-                                        <div className="h-1.5 w-full bg-gray-100 dark:bg-slate-700 rounded-full overflow-hidden">
-                                            <div className="h-full bg-gradient-to-r from-teal-400 to-emerald-500 transition-all duration-500" style={{ width: `${percentage}%` }} />
-                                        </div>
-                                    </div>
-
-                                    <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-slate-700">
-                                        <div>
-                                            <div className="flex items-center gap-2 mb-0.5">
-                                                <p className="text-[10px] text-gray-400 uppercase font-bold">Fatura Atual</p>
-                                                <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium border
-                                                    ${invoiceStatus === 'Aberta' ? 'bg-blue-50 text-blue-600 border-blue-100 dark:bg-blue-900/20 dark:border-blue-800' : 
-                                                      invoiceStatus === 'Fechada' ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
-                                                    {invoiceStatus}
+                                            <div className="text-right">
+                                                <span className="font-bold text-emerald-600 dark:text-emerald-400 block whitespace-nowrap text-sm">
+                                                    R$ {avail.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                                 </span>
+                                                <span className="text-[10px] text-gray-400 uppercase font-bold">Disponível</span>
                                             </div>
-                                            <p className="text-sm font-bold text-rose-500">R$ {Number(invoiceVal).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                                         </div>
-                                        
-                                        {Number(invoiceVal) > 0 && invoiceStatus === 'Aberta' && (
-                                            <button 
-                                                onClick={(e) => { e.stopPropagation(); handleOpenPayInvoice(card); }}
-                                                className="px-3 py-1 bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold rounded-lg shadow-sm transition-colors"
-                                            >
-                                                Pagar
-                                            </button>
-                                        )}
-                                        {(Number(invoiceVal) === 0 || invoiceStatus === 'Paga') && (
-                                            <div className="flex items-center gap-1 text-emerald-500">
-                                                <CheckCircle size={14}/>
-                                                <span className="text-xs font-medium">Em dia</span>
+
+                                        <div className="w-full mt-2 mb-3">
+                                            <div className="h-1.5 w-full bg-gray-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                                                <div className="h-full bg-gradient-to-r from-teal-400 to-emerald-500 transition-all duration-500" style={{ width: `${percentage}%` }} />
                                             </div>
-                                        )}
+                                        </div>
+
+                                        <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-slate-700">
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-0.5">
+                                                    <p className="text-[10px] text-gray-400 uppercase font-bold">Fatura Atual</p>
+                                                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium border
+                                                        ${invoiceStatus === 'Aberta' ? 'bg-blue-50 text-blue-600 border-blue-100 dark:bg-blue-900/20 dark:border-blue-800' : 
+                                                        invoiceStatus === 'Fechada' ? 'bg-rose-50 text-rose-600 border-rose-100' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                                                        {invoiceStatus}
+                                                    </span>
+                                                </div>
+                                                <p className="text-sm font-bold text-rose-500">R$ {Number(invoiceVal).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                            </div>
+                                            
+                                            {Number(invoiceVal) > 0 && invoiceStatus === 'Aberta' && (
+                                                <button onClick={(e) => { e.stopPropagation(); handleOpenPayInvoice(card); }} className="px-3 py-1 bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold rounded-lg shadow-sm transition-colors">Pagar</button>
+                                            )}
+                                            {(Number(invoiceVal) === 0 || invoiceStatus === 'Paga') && (
+                                                <div className="flex items-center gap-1 text-emerald-500"><CheckCircle size={14}/><span className="text-xs font-medium">Em dia</span></div>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            );
+                                );
                         })}
                         {cards.length === 0 && <p className="text-gray-500 text-sm py-4 col-span-full text-center">Nenhum cartão cadastrado.</p>}
                     </div>
@@ -482,15 +481,7 @@ export default function Dashboard() {
         <Plus size={28} strokeWidth={2.5} />
       </button>
 
-      <nav className="fixed bottom-0 left-0 w-full pb-safe pt-2 z-40 border-t transition-colors md:hidden bg-white border-gray-200 dark:bg-[#1E293B] dark:border-slate-800">
-        <div className="flex justify-between items-center px-6 h-16 w-full">
-            <button className="flex flex-col items-center space-y-1 text-teal-600 dark:text-teal-400"><Home size={22} /><span className="text-[10px]">Início</span></button>
-            <button className="flex flex-col items-center space-y-1 text-gray-400"><BarChart3 size={22} /><span className="text-[10px]">Hist.</span></button>
-            <button className="flex flex-col items-center space-y-1 text-gray-400"><Box size={22} /><span className="text-[10px]">Estoque</span></button>
-            <button className="flex flex-col items-center space-y-1 text-gray-400"><ShoppingCart size={22} /><span className="text-[10px]">Compras</span></button>
-            <button className="flex flex-col items-center space-y-1 text-gray-400"><Settings size={22} /><span className="text-[10px]">Config.</span></button>
-        </div>
-      </nav>
+      <MobileMenu />
 
       <Modal 
         isOpen={isModalOpen} 
@@ -514,14 +505,12 @@ export default function Dashboard() {
             </div>
         )}
 
-        {/* FORMS */}
         {modalView === 'ACCOUNT' && <NewAccountForm initialData={editingItem} onBack={!editingItem ? () => setModalView('MENU') : null} onSuccess={() => { setIsModalOpen(false); loadDashboardData(); }} />}
         {modalView === 'CARD' && <NewCreditCardForm initialData={editingItem} onBack={!editingItem ? () => setModalView('MENU') : null} onSuccess={() => { setIsModalOpen(false); loadDashboardData(); }} />}
         {modalView === 'RECURRING' && <NewRecurringBillForm initialData={editingItem} onBack={!editingItem ? () => setModalView('MENU') : null} onManageCategories={() => setModalView('CATEGORY_MANAGER')} onSuccess={() => { setIsModalOpen(false); loadDashboardData(); }} />}
         {modalView === 'NEW_TRANSACTION' && <NewTransactionForm type={transactionType} accounts={accounts} cards={cards} onManageCategories={() => setModalView('CATEGORY_MANAGER')} onSuccess={() => { setIsModalOpen(false); loadDashboardData(); }} />}
         {modalView === 'CATEGORY_MANAGER' && <CategoryManager onBack={() => { if(transactionType) setModalView('NEW_TRANSACTION'); else setModalView('RECURRING'); }} />}
 
-        {/* PAGAR CONTA RECORRENTE */}
         {modalView === 'PAY_BILL' && billToPay && (
             <form onSubmit={confirmPayment} className="space-y-4">
                 <div className="bg-gray-50 dark:bg-slate-900 p-4 rounded-xl border border-gray-100 dark:border-slate-700">
@@ -542,7 +531,6 @@ export default function Dashboard() {
             </form>
         )}
 
-        {/* PAGAR FATURA CARTÃO */}
         {modalView === 'PAY_INVOICE' && invoiceToPay && (
             <form onSubmit={confirmInvoicePayment} className="space-y-4">
                 <div className="bg-rose-50 dark:bg-rose-900/10 p-4 rounded-xl border border-rose-100 dark:border-rose-900/30">

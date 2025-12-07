@@ -1,18 +1,40 @@
+from django.contrib import admin
 from django.urls import path, include
-from rest_framework.routers import DefaultRouter
-from .views import AccountViewSet, CreditCardViewSet, TransactionViewSet, InventoryViewSet, ShoppingListViewSet, ProductViewSet, RecurringBillViewSet, CategoryViewSet, InvoiceViewSet
+from rest_framework import routers
+from rest_framework.authtoken.views import obtain_auth_token
 
-router = DefaultRouter()
-router.register(r'accounts', AccountViewSet, basename='account')
-router.register(r'credit-cards', CreditCardViewSet, basename='credit-card')
-router.register(r'transactions', TransactionViewSet, basename='transaction')
+# Importando TODAS as views
+from core.views import (
+    HouseViewSet, HouseMemberViewSet, AccountViewSet, 
+    CreditCardViewSet, InvoiceViewSet, RecurringBillViewSet, 
+    TransactionViewSet, CategoryViewSet, ProductViewSet, 
+    InventoryViewSet, ShoppingListViewSet, HistoryViewSet,
+    InvitationViewSet, RegisterView
+)
+
+# Configurando o Roteador
+router = routers.DefaultRouter()
+router.register(r'houses', HouseViewSet)
+router.register(r'members', HouseMemberViewSet)
+router.register(r'accounts', AccountViewSet)
+router.register(r'credit-cards', CreditCardViewSet)
+router.register(r'invoices', InvoiceViewSet)
+router.register(r'recurring-bills', RecurringBillViewSet)
+router.register(r'transactions', TransactionViewSet)
+router.register(r'categories', CategoryViewSet)
 router.register(r'products', ProductViewSet)
-router.register(r'inventory', InventoryViewSet, basename='inventory')
-router.register(r'shopping-list', ShoppingListViewSet, basename='shopping-list')
-router.register(r'recurring-bills', RecurringBillViewSet, basename='recurring-bill')
-router.register(r'categories', CategoryViewSet, basename='category')
-router.register(r'invoices', InvoiceViewSet, basename='invoice')
+router.register(r'inventory', InventoryViewSet)
+router.register(r'shopping-list', ShoppingListViewSet)
+router.register(r'history', HistoryViewSet, basename='history')
+
+# --- ROTA DE CONVITES ---
+# O basename é crucial quando a ViewSet não tem queryset definido
+router.register(r'invitations', InvitationViewSet, basename='invitations')
 
 urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('api-token-auth/', obtain_auth_token), # Login
+    
+    # Inclui todas as rotas acima na raiz da API
     path('', include(router.urls)),
 ]

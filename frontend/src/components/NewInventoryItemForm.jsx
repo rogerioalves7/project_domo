@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
-import Input from './Input';
-import { Package, AlertCircle, Save, ArrowLeft, Trash2 } from 'lucide-react';
+// Removi o Input dos imports pois vamos usar o HTML direto, mas mantive caso use para outros campos futuros
+import { Package, AlertCircle, Save, ArrowLeft, Trash2, Plus, Minus } from 'lucide-react';
 
-export default function NewInventoryItemForm({ onSuccess, onBack, initialData = null }) {
+export default function NewInventoryItemForm({ onSuccess, onBack, onCreateProduct, initialData = null }) {
   const [products, setProducts] = useState([]);
   const [productId, setProductId] = useState('');
   const [quantity, setQuantity] = useState('');
@@ -42,37 +42,56 @@ export default function NewInventoryItemForm({ onSuccess, onBack, initialData = 
       const payload = {
         product: productId,
         quantity: parseFloat(quantity),
-        min_quantity: parseFloat(minQuantity)
       };
 
       if (initialData) {
-        await api.put(`/inventory/${initialData.id}/`, payload);
-        toast.success("Item atualizado!");
+          payload.min_quantity = parseFloat(minQuantity);
+          await api.put(`/inventory/${initialData.id}/`, payload);
+          toast.success("Item atualizado!");
       } else {
-        await api.post('/inventory/', payload);
-        toast.success("Item adicionado ao estoque!");
+          await api.post('/inventory/', payload);
+          toast.success("Item adicionado ao estoque!");
       }
       onSuccess();
     } catch (error) {
       console.error(error);
-      toast.error("Erro ao salvar item. Verifique se já não existe no estoque.");
+      toast.error("Erro ao salvar item.");
     } finally {
       setLoading(false);
     }
   }
 
-  async function handleDelete() {
-    if (confirm("Remover este item do estoque?")) {
-        try {
-            setLoading(true);
-            await api.delete(`/inventory/${initialData.id}/`);
-            toast.success("Item removido.");
-            onSuccess();
-        } catch (error) {
-            toast.error("Erro ao remover.");
-        }
+  function handleDelete() {
+    toast((t) => (
+      <div className="flex flex-col gap-3 min-w-[200px]">
+        <div className="font-medium text-gray-800">Remover do estoque?</div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={() => toast.dismiss(t.id)} className="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 rounded">Cancelar</button>
+          <button onClick={() => { toast.dismiss(t.id); confirmDelete(); }} className="px-3 py-1.5 text-sm bg-red-500 text-white rounded">Remover</button>
+        </div>
+      </div>
+    ), { duration: 5000, position: 'top-center' });
+  }
+
+  async function confirmDelete() {
+    try {
+        setLoading(true);
+        await api.delete(`/inventory/${initialData.id}/`);
+        toast.success("Item removido.", { icon: '🗑️' });
+        onSuccess();
+    } catch (error) {
+        toast.error("Erro ao remover.");
+        setLoading(false);
     }
   }
+
+  // Helper para incrementar/decrementar
+  const handleStep = (setter, currentVal, delta) => {
+    const val = parseFloat(currentVal) || 0;
+    const newVal = val + delta;
+    if (newVal < 0) return;
+    setter(newVal);
+  };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -84,7 +103,9 @@ export default function NewInventoryItemForm({ onSuccess, onBack, initialData = 
             </button>
          )}
          {initialData && (
-            <button type="button" onClick={handleDelete} className="text-red-500 p-1"><Trash2 size={18} /></button>
+            <button type="button" onClick={handleDelete} className="text-red-500 hover:bg-red-50 p-2 rounded-full transition">
+                <Trash2 size={18} />
+            </button>
          )}
       </div>
 
@@ -95,7 +116,7 @@ export default function NewInventoryItemForm({ onSuccess, onBack, initialData = 
             <select
                 value={productId}
                 onChange={e => setProductId(e.target.value)}
-                disabled={!!initialData} // Não pode trocar o produto na edição, melhor excluir e criar outro
+                disabled={!!initialData}
                 className="w-full pl-10 pr-4 py-3 rounded-xl appearance-none bg-white border border-gray-200 text-gray-900 dark:bg-slate-900 dark:border-slate-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:opacity-50"
             >
                 {products.length === 0 && <option>Nenhum produto cadastrado</option>}
@@ -104,23 +125,78 @@ export default function NewInventoryItemForm({ onSuccess, onBack, initialData = 
                 ))}
             </select>
         </div>
-        {/* Link para criar produto (Placeholder por enquanto) */}
-        <p className="text-xs text-teal-600 mt-1 text-right cursor-pointer hover:underline">Novo Produto?</p>
+        {!initialData && (
+            <button type="button" onClick={onCreateProduct} className="text-xs text-teal-600 dark:text-teal-400 mt-1.5 ml-1 font-medium hover:underline focus:outline-none">
+                + Cadastrar novo produto
+            </button>
+        )}
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className={`grid gap-4 ${initialData ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        
+        {/* INPUT QTD ATUAL (STEPPER INTEGRADO) */}
         <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Qtd Atual</label>
-            <Input type="number" step="0.1" required value={quantity} onChange={e => setQuantity(e.target.value)} />
+            <div className="flex items-center h-[50px] w-full rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden focus-within:ring-2 focus-within:ring-teal-500 transition-all">
+                <button 
+                    type="button"
+                    onClick={() => handleStep(setQuantity, quantity, -1)}
+                    className="h-full px-4 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors"
+                >
+                    <Minus size={18} strokeWidth={2.5} />
+                </button>
+                <input 
+                    type="number" 
+                    step="0.1"
+                    required
+                    className="w-full h-full text-center bg-transparent border-none text-gray-800 dark:text-white font-bold outline-none text-lg [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    value={quantity}
+                    onChange={e => setQuantity(e.target.value)}
+                />
+                <button 
+                    type="button"
+                    onClick={() => handleStep(setQuantity, quantity, 1)}
+                    className="h-full px-4 flex items-center justify-center text-teal-500 hover:text-teal-700 hover:bg-teal-50 dark:hover:bg-teal-900/20 transition-colors"
+                >
+                    <Plus size={18} strokeWidth={2.5} />
+                </button>
+            </div>
         </div>
-        <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Mínimo (Alerta)</label>
-            <Input type="number" step="0.1" required value={minQuantity} onChange={e => setMinQuantity(e.target.value)} icon={AlertCircle} />
-        </div>
+
+        {/* INPUT MÍNIMO (STEPPER INTEGRADO - SÓ NA EDIÇÃO) */}
+        {initialData && (
+            <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Mínimo</label>
+                <div className="flex items-center h-[50px] w-full rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden focus-within:ring-2 focus-within:ring-teal-500 transition-all">
+                    <button 
+                        type="button"
+                        onClick={() => handleStep(setMinQuantity, minQuantity, -1)}
+                        className="h-full px-4 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors"
+                    >
+                        <Minus size={18} strokeWidth={2.5} />
+                    </button>
+                    <input 
+                        type="number" 
+                        step="0.1"
+                        required
+                        className="w-full h-full text-center bg-transparent border-none text-gray-800 dark:text-white font-bold outline-none text-lg [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        value={minQuantity}
+                        onChange={e => setMinQuantity(e.target.value)}
+                    />
+                    <button 
+                        type="button"
+                        onClick={() => handleStep(setMinQuantity, minQuantity, 1)}
+                        className="h-full px-4 flex items-center justify-center text-teal-500 hover:text-teal-700 hover:bg-teal-50 dark:hover:bg-teal-900/20 transition-colors"
+                    >
+                        <Plus size={18} strokeWidth={2.5} />
+                    </button>
+                </div>
+            </div>
+        )}
       </div>
 
-      <button type="submit" disabled={loading} className="w-full bg-teal-600 text-white font-bold py-3 rounded-xl hover:bg-teal-500 active:scale-95 transition flex items-center justify-center gap-2">
-        <Save size={20} /> {loading ? 'Salvando...' : 'Salvar no Estoque'}
+      <button type="submit" disabled={loading} className="w-full bg-teal-600 text-white font-bold py-3.5 rounded-xl hover:bg-teal-500 active:scale-95 transition flex items-center justify-center gap-2 shadow-sm">
+        <Save size={20} /> {loading ? 'Salvando...' : (initialData ? 'Atualizar Item' : 'Adicionar ao Estoque')}
       </button>
 
     </form>

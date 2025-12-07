@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
 from datetime import date
+import uuid
 
 # --- GESTÃO DA CASA (MULTI-TENANCY) ---
 
@@ -128,11 +129,13 @@ class Transaction(models.Model):
 # --- MÓDULO ESTOQUE ---
 
 class Product(models.Model):
-    """Catálogo de Produtos da Casa"""
-    house = models.ForeignKey(House, on_delete=models.CASCADE, related_name='products', null=True) # Vincula à casa
+    house = models.ForeignKey(House, on_delete=models.CASCADE, related_name='products', null=True)
     name = models.CharField(max_length=100, verbose_name="Nome do Produto")
-    measure_unit = models.CharField(max_length=10, default='un', help_text='kg, L, un, cx')
-    estimated_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="Preço Médio")
+    measure_unit = models.CharField(max_length=10, default='un')
+    estimated_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    
+    # NOVO CAMPO: Define o padrão para este produto
+    min_quantity = models.DecimalField(max_digits=8, decimal_places=2, default=1, verbose_name="Qtd Mínima Padrão")
 
     def __str__(self):
         return self.name
@@ -153,7 +156,34 @@ class ShoppingList(models.Model):
     house = models.ForeignKey(House, on_delete=models.CASCADE, related_name='shopping_list')
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity_to_buy = models.DecimalField(max_digits=8, decimal_places=2, default=1)
-    is_purchased = models.BooleanField(default=False)
+    
+    # NOVOS CAMPOS FINANCEIROS
+    real_unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="Preço Real (Un)")
+    discount_unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, verbose_name="Preço c/ Desc (Un)")
+    
+    is_purchased = models.BooleanField(default=False) # "No Carrinho"
 
     def __str__(self):
         return f"Comprar: {self.product.name}"
+    
+class TransactionItem(models.Model):
+    """Itens detalhados de uma transação (compra de mercado)"""
+    transaction = models.ForeignKey(Transaction, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    quantity = models.DecimalField(max_digits=10, decimal_places=2)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    total_price = models.DecimalField(max_digits=10, decimal_places=2)
+
+    def __str__(self):
+        return f"{self.quantity}x {self.product.name} em {self.transaction}"
+    
+class HouseInvitation(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    house = models.ForeignKey(House, on_delete=models.CASCADE)
+    inviter = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_invitations')
+    email = models.EmailField(verbose_name="E-mail do Convidado")
+    created_at = models.DateTimeField(auto_now_add=True)
+    accepted = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Convite para {self.email} ({self.house.name})"

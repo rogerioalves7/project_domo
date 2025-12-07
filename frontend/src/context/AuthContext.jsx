@@ -6,58 +6,74 @@ export const AuthContext = createContext({});
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  
-  // Ao abrir o app, verifica se já existe um token salvo
-  useEffect(() => {
-    const storagedToken = localStorage.getItem('@MyHome:token');
-    const storagedUser = localStorage.getItem('@MyHome:user');
+  const [loading, setLoading] = useState(true); 
 
-    if (storagedToken && storagedUser) {
-      api.defaults.headers.Authorization = `Token ${storagedToken}`;
-      setUser(JSON.parse(storagedUser));
+  useEffect(() => {
+    async function loadStorageData() {
+      const storagedToken = localStorage.getItem('@MyHome:token');
+      const storagedUser = localStorage.getItem('@MyHome:user');
+
+      if (storagedToken && storagedUser) {
+        try {
+            api.defaults.headers.Authorization = `Token ${storagedToken}`;
+            setUser(JSON.parse(storagedUser));
+        } catch (error) {
+            localStorage.clear();
+            setUser(null);
+        }
+      }
+      setLoading(false); 
     }
+    loadStorageData();
   }, []);
 
   async function signIn({ username, password }) {
     try {
-      // 1. Tenta fazer login no Django
-      const response = await api.post('http://127.0.0.1:8000/api-token-auth/', {
-        username, // O Django espera 'username', não email por padrão
-        password,
-      });
-
-      // 2. Se der certo, pega o token
+      const response = await api.post('api-token-auth/', { username, password });
       const { token } = response.data;
-
-      // 3. Salva no navegador/celular para não deslogar ao fechar
-      localStorage.setItem('@MyHome:token', token);
-      localStorage.setItem('@MyHome:user', JSON.stringify({ username }));
-
-      // 4. Configura o Axios para todas as próximas requisições terem o token
-      api.defaults.headers.Authorization = `Token ${token}`;
-
-      // 5. Atualiza o estado global
-      setUser({ username });
-      
-      toast.success(`Bem-vindo de volta, ${username}!`);
-
+      handleLoginSuccess(token, username);
     } catch (error) {
       console.error(error);
-      toast.error("Falha no login. Verifique suas credenciais.");
-      throw error; // Repassa o erro para o componente tratar se precisar
+      toast.error("Erro ao fazer login. Verifique seus dados.");
+      throw error;
     }
   }
 
+  // --- NOVA FUNÇÃO DE REGISTRO ---
+  async function signUp({ username, email, password, invitation_token }) {
+    try {
+        const response = await api.post('/register/', { username, email, password, invitation_token });
+        const { token } = response.data;
+        
+        // Já loga o usuário automaticamente após criar a conta
+        handleLoginSuccess(token, username);
+        toast.success("Conta criada com sucesso!");
+        
+    } catch (error) {
+        console.error(error);
+        // Pega a mensagem de erro específica do backend se existir
+        const msg = error.response?.data?.error || "Erro ao criar conta.";
+        toast.error(msg);
+        throw error;
+    }
+  }
+
+  // Helper para evitar repetição de código
+  function handleLoginSuccess(token, username) {
+      localStorage.setItem('@MyHome:token', token);
+      localStorage.setItem('@MyHome:user', JSON.stringify({ username }));
+      api.defaults.headers.Authorization = `Token ${token}`;
+      setUser({ username });
+  }
+
   function signOut() {
-    localStorage.removeItem('@MyHome:token');
-    localStorage.removeItem('@MyHome:user');
+    localStorage.clear();
     api.defaults.headers.Authorization = undefined;
     setUser(null);
-    toast('Até logo!', { icon: '👋' });
   }
 
   return (
-    <AuthContext.Provider value={{ signed: !!user, user, signIn, signOut }}>
+    <AuthContext.Provider value={{ signed: !!user, user, signIn, signUp, signOut, loading }}>
       {children}
     </AuthContext.Provider>
   );

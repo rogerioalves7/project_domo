@@ -3,16 +3,16 @@ import api from '../services/api';
 import toast from 'react-hot-toast';
 import Input from './Input';
 import MoneyInput from './MoneyInput';
-import { Package, Plus, Trash2, ArrowLeft, Search, Tag } from 'lucide-react';
+import { Package, Plus, Trash2, ArrowLeft, Minus } from 'lucide-react';
 
 export default function ProductManager({ onBack }) {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  // Form States
   const [name, setName] = useState('');
   const [unit, setUnit] = useState('un');
   const [price, setPrice] = useState('');
+  const [minQty, setMinQty] = useState('1');
 
   useEffect(() => {
     fetchProducts();
@@ -34,39 +34,57 @@ export default function ProductManager({ onBack }) {
     if (!name) return;
 
     try {
-      const finalPrice = typeof price === 'string' ? parseFloat(price.replace(',', '.')) : price;
-
+      const finalPrice = price || 0;
       await api.post('/products/', { 
           name, 
           measure_unit: unit,
-          estimated_price: finalPrice || 0
+          estimated_price: finalPrice,
+          min_quantity: parseFloat(minQty) || 1 
       });
       
       toast.success("Produto cadastrado!");
       setName('');
       setPrice('');
-      fetchProducts(); // Recarrega a lista
-      
+      setMinQty('1'); 
+      fetchProducts();
     } catch (error) {
       console.error(error);
       toast.error("Erro ao criar.");
     }
   }
 
-  async function handleDelete(id) {
-    if(!confirm("Excluir este produto do catálogo?")) return;
+  function handleDelete(id) {
+    toast((t) => (
+      <div className="flex flex-col gap-3 min-w-[200px]">
+        <div className="font-medium text-gray-800">Excluir produto?</div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={() => toast.dismiss(t.id)} className="px-3 py-1.5 text-sm text-gray-600 bg-gray-100 rounded">Cancelar</button>
+          <button onClick={() => { toast.dismiss(t.id); confirmDelete(id); }} className="px-3 py-1.5 text-sm bg-red-500 text-white rounded">Excluir</button>
+        </div>
+      </div>
+    ), { duration: 5000, position: 'top-center' });
+  }
+
+  async function confirmDelete(id) {
     try {
       await api.delete(`/products/${id}/`);
-      toast.success("Excluído.");
+      toast.success("Excluído.", { icon: '🗑️' });
       fetchProducts();
     } catch (error) {
-      toast.error("Erro ao excluir (pode estar em uso no estoque).");
+      toast.error("Erro ao excluir (pode estar em uso).");
     }
   }
 
+  // Helper de incremento
+  const handleStep = (delta) => {
+    const val = parseFloat(minQty) || 0;
+    const newVal = val + delta;
+    if (newVal < 0) return;
+    setMinQty(String(newVal));
+  };
+
   return (
     <div className="space-y-6">
-        {/* Cabeçalho */}
         <div className="flex items-center mb-4">
             <button 
                 onClick={onBack}
@@ -77,7 +95,6 @@ export default function ProductManager({ onBack }) {
             <h3 className="ml-auto font-bold text-gray-700 dark:text-gray-200">Catálogo de Produtos</h3>
         </div>
 
-        {/* Form de Criação */}
         <div className="bg-gray-50 dark:bg-slate-900 p-4 rounded-xl border border-gray-100 dark:border-slate-700">
             <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Novo Produto</h4>
             <form onSubmit={handleCreate} className="space-y-3">
@@ -90,15 +107,43 @@ export default function ProductManager({ onBack }) {
                     />
                 </div>
                 
-                <div className="flex gap-3">
-                    <div className="flex-1">
+                <div className="grid grid-cols-3 gap-3">
+                    <div className="col-span-1">
                         <MoneyInput 
                             placeholder="Preço Est." 
                             value={price} 
                             onValueChange={setPrice} 
                         />
                     </div>
-                    <div className="w-1/3">
+                    
+                    {/* CAMPO MÍNIMO (STEPPER INTEGRADO) */}
+                    <div className="col-span-1">
+                        <div className="flex items-center h-[54px] w-full rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-hidden focus-within:ring-2 focus-within:ring-teal-500 transition-all">
+                            <button 
+                                type="button"
+                                onClick={() => handleStep(-1)}
+                                className="h-full px-2 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
+                            >
+                                <Minus size={14} strokeWidth={2.5} />
+                            </button>
+                            <input 
+                                type="number" 
+                                placeholder="Mín"
+                                className="w-full h-full text-center bg-transparent border-none text-gray-800 dark:text-white font-bold outline-none text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                value={minQty}
+                                onChange={e => setMinQty(e.target.value)}
+                            />
+                            <button 
+                                type="button"
+                                onClick={() => handleStep(1)}
+                                className="h-full px-2 flex items-center justify-center text-teal-500 hover:text-teal-700 hover:bg-teal-50 dark:hover:bg-teal-900/20 transition-colors"
+                            >
+                                <Plus size={14} strokeWidth={2.5} />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="col-span-1">
                         <select 
                             value={unit}
                             onChange={e => setUnit(e.target.value)}
@@ -119,11 +164,8 @@ export default function ProductManager({ onBack }) {
             </form>
         </div>
 
-        {/* Lista Simples */}
         <div className="space-y-2 max-h-60 overflow-y-auto pr-1 scroll-smooth">
-            {loading ? <p className="text-center text-gray-500">Carregando...</p> : 
-             products.length === 0 ? <p className="text-center text-gray-500 text-sm">Nenhum produto cadastrado.</p> :
-             products.map(prod => (
+            {products.map(prod => (
                 <div key={prod.id} className="flex items-center justify-between p-3 bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-lg group">
                     <div className="flex items-center gap-3">
                         <div className="p-2 rounded-full bg-teal-50 dark:bg-teal-900/20 text-teal-600 dark:text-teal-400">
@@ -132,7 +174,7 @@ export default function ProductManager({ onBack }) {
                         <div>
                             <p className="text-gray-800 dark:text-gray-200 font-medium text-sm">{prod.name}</p>
                             <p className="text-xs text-gray-500">
-                                R$ {Number(prod.estimated_price).toFixed(2)} / {prod.measure_unit}
+                                Mín: {prod.min_quantity} {prod.measure_unit} • R$ {Number(prod.estimated_price).toFixed(2)}
                             </p>
                         </div>
                     </div>
