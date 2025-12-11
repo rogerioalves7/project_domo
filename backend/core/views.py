@@ -9,6 +9,7 @@ from decimal import Decimal
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.contrib.auth.models import User
+from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.authtoken.models import Token
 from django.core.mail import send_mail
 from django.conf import settings
@@ -571,6 +572,11 @@ class InvitationViewSet(viewsets.ViewSet):
             print(f"ERRO CRÍTICO AO ACEITAR CONVITE: {str(e)}")
             return Response({'error': 'Erro interno ao processar o convite.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError, ObjectDoesNotExist
+from django.db import IntegrityError
+# ... (mantenha os outros imports como APIView, AllowAny, Response, etc.)
+
 class RegisterView(APIView):
     permission_classes = [AllowAny] 
 
@@ -578,9 +584,96 @@ class RegisterView(APIView):
         username = request.data.get('username')
         email = request.data.get('email')
         password = request.data.get('password')
+        invitation_token = request.data.get('invitation_token') 
+
+        # 1. VALIDAÇÃO BÁSICA DE CAMPOS
+        if not username or not password or not email:
+            return Response({'error': 'Por favor, preencha todos os campos (Usuário, E-mail e Senha).'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. VALIDAÇÃO DE UNICIDADE (Amigável)
+        if User.objects.filter(username=username).exists():
+            return Response({'error': f'O usuário "{username}" já está em uso. Escolha outro.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if User.objects.filter(email=email).exists():
+            return Response({'error': f'O e-mail "{email}" já possui cadastro. Tente fazer login.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 3. VALIDAÇÃO DE FORÇA DA SENHA (Django Native)
+        try:
+            validate_password(password)
+        except ValidationError as e:
+            # Retorna a mensagem exata do Django (ex: "A senha deve ter pelo menos 8 caracteres")
+            return Response({'error': ' '.join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 4. VALIDAÇÃO DO CONVITE (Lógica do Porteiro)
+        if invitation_token:
+            try:
+                invite = HouseInvitation.objects.get(id=invitation_token, accepted=False)
+                
+                # Validação de Segurança: E-mail deve bater
+                if invite.email != email:
+                    return Response({
+                        'error': f'Convite inválido para este e-mail. O convite foi enviado para "{invite.email}", mas você está cadastrando "{email}".'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                    
+            except (ObjectDoesNotExist, ValueError):
+                return Response({'error': 'O link de convite é inválido, expirou ou já foi utilizado.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 5. CRIAÇÃO DA CONTA (Atomicidade)
+        try:
+            # Cria o usuário
+            user = User.objects.create_user(username=username, email=email, password=password)
+            
+            # Garante a criação da Casa Padrão (Se o signal falhou ou não existe)
+            if not HouseMember.objects.filter(user=user).exists():
+                house_name = f"Casa de {username}"
+                house = House.objects.create(name=house_name)
+                HouseMember.objects.create(user=user, house=house, role='ADMIN')
+
+            # Gera Token
+            token, _ = Token.objects.get_or_create(user=user)
+
+            return Response({
+                'token': token.key,
+                'user_id': user.pk,
+                'username': user.username,
+                'email': user.email
+            }, status=status.HTTP_201_CREATED)
+            
+        except IntegrityError:
+            return Response({'error': 'Erro de integridade: Este usuário ou e-mail já foi registrado simultaneamente.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        except Exception as e:
+            # Erro genérico final (para bugs de código)
+            print(f"ERRO CRÍTICO NO REGISTRO: {str(e)}")
+            return Response({'error': 'Ocorreu um erro interno ao criar sua conta. Por favor, tente novamente.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    permission_classes = [AllowAny] 
+
+    def post(self, request):
+        username = request.data.get('username')
+        email = request.data.get('email')
+        password = request.data.get('password')
+        # Captura o token apenas para validação (opcional no payload)
+        invitation_token = request.data.get('invitation_token') 
 
         if not username or not password or not email:
             return Response({'error': 'Preencha todos os campos.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # --- NOVA VALIDAÇÃO PRÉ-CRIAÇÃO (O Porteiro) ---
+        if invitation_token:
+            try:
+                # Busca o convite
+                invite = HouseInvitation.objects.get(id=invitation_token, accepted=False)
+                
+                # VERIFICAÇÃO CRÍTICA: O e-mail bate?
+                if invite.email != email:
+                    return Response({
+                        'error': f'Este convite foi enviado para {invite.email}, não para {email}. Corrija o e-mail ou use outro convite.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                    
+            except (HouseInvitation.DoesNotExist, ValueError):
+                # Se o token for lixo ou não existir, avisamos antes de criar a conta
+                return Response({'error': 'O convite fornecido é inválido ou expirou.'}, status=status.HTTP_400_BAD_REQUEST)
+        # ------------------------------------------------
 
         if User.objects.filter(username=username).exists():
             return Response({'error': 'Nome de usuário já existe.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -588,8 +681,16 @@ class RegisterView(APIView):
             return Response({'error': 'E-mail já cadastrado.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Criação simples. O Signal criará a casa padrão automaticamente.
+            # 1. Cria o usuário (Agora seguro, pois passamos pelas validações)
             user = User.objects.create_user(username=username, email=email, password=password)
+            
+            # 2. Cria a Casa Padrão (Fallback manual para garantir Admin)
+            if not HouseMember.objects.filter(user=user).exists():
+                house_name = f"Casa de {username}"
+                house = House.objects.create(name=house_name)
+                HouseMember.objects.create(user=user, house=house, role='ADMIN')
+
+            # 3. Retorna Token
             token, _ = Token.objects.get_or_create(user=user)
 
             return Response({
@@ -601,8 +702,7 @@ class RegisterView(APIView):
             
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-
+        
 class InvitationViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
 
@@ -700,3 +800,21 @@ class InvitationViewSet(viewsets.ViewSet):
             return Response({'message': 'Cancelado.'})
         except:
             return Response({'error': 'Não encontrado.'}, status=404)
+        
+class CustomAuthToken(ObtainAuthToken):
+    """
+    View de Login personalizada que retorna Token + Dados do Usuário.
+    Isso garante que o frontend receba o 'username' correto mesmo logando com e-mail.
+    """
+    def post(self, request, *args, **kwargs):
+        serializer = self.serializer_class(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        user = serializer.validated_data['user']
+        token, created = Token.objects.get_or_create(user=user)
+        
+        return Response({
+            'token': token.key,
+            'user_id': user.pk,
+            'username': user.username, # <--- O DADO IMPORTANTE
+            'email': user.email
+        })

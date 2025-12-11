@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.urls import path, include
 from rest_framework import routers
 from rest_framework.authtoken.views import obtain_auth_token
+from core.views import CustomAuthToken
 
 from core.views import (
     RegisterView, InvitationViewSet, # ... e todos os outros ViewSets
@@ -30,7 +31,7 @@ router.register(r'shopping-list', ShoppingListViewSet)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api-token-auth/', obtain_auth_token),
+    path('api-token-auth/', CustomAuthToken.as_view()),
     path('register/', RegisterView.as_view()),
     
     # ROTAS DE CONVITE
