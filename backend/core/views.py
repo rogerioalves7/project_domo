@@ -339,52 +339,7 @@ class TransactionViewSet(BaseHouseViewSet):
         # 5. FLUXO PADRÃO (Receitas, Despesas à vista, Débito)
         # O super().create() vai salvar, e o SIGNAL vai atualizar o saldo da conta.
         return super().create(request, *args, **kwargs)
-    queryset = Transaction.objects.all()
-    serializer_class = TransactionSerializer
-    
-    def get_queryset(self):
-        return super().get_queryset().order_by('-date', '-id')
-
-    def create(self, request, *args, **kwargs):
-        # Dados da requisição
-        payment_method = request.data.get('payment_method')
-        transaction_type = request.data.get('type')
-        val_str = request.data.get('value')
-        
-        # Converte valor para Decimal para comparação segura
-        try:
-            value = Decimal(str(val_str))
-        except:
-            return Response({'error': 'Valor inválido.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # --- REGRA DE NEGÓCIO: SALDO INSUFICIENTE ---
-        if transaction_type == 'EXPENSE' and payment_method == 'ACCOUNT':
-            account_id = request.data.get('account') # O frontend envia 'account'
-            if account_id:
-                try:
-                    # Busca a conta para checar saldo (garantindo que pertence à casa)
-                    account = Account.objects.get(id=account_id, house=request.user.house_member.house)
-                    
-                    if value > account.balance:
-                        return Response({
-                            'error': f'Saldo insuficiente na conta "{account.name}". Disponível: R$ {account.balance}'
-                        }, status=status.HTTP_400_BAD_REQUEST)
-                        
-                except Account.DoesNotExist:
-                    return Response({'error': 'Conta selecionada não encontrada.'}, status=status.HTTP_404_NOT_FOUND)
-
-        # --- LÓGICA DE CARTÃO DE CRÉDITO (Mantida) ---
-        card_id = request.data.get('card_id') # Frontend pode mandar card_id ou card
-        installments = int(request.data.get('installments', 1))
-        
-        if transaction_type == 'EXPENSE' and payment_method == 'CREDIT_CARD':
-            # ... (Mantenha sua lógica de parcelamento existente aqui) ...
-            # Se você já tinha a lógica de cartão, mantenha-a. 
-            # O bloco 'super().create' abaixo cuida do resto se não entrar no if do cartão.
-            pass 
-
-        return super().create(request, *args, **kwargs)
-    
+       
 # ======================================================================
 # ESTOQUE E PRODUTOS
 # ======================================================================
