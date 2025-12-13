@@ -1,59 +1,92 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import api from '../services/api';
 import Sidebar from '../components/Sidebar';
 import MobileMenu from '../components/MobileMenu';
+import FinancialCharts from '../components/Charts/FinancialCharts'; 
 import { 
-  BarChart3, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Calendar, PieChart
+  History as HistoryIcon, Calendar, ArrowUpRight, ArrowDownLeft, 
+  Search, ShoppingBag, Filter, X
 } from 'lucide-react';
-import { 
-  PieChart as RePieChart, Pie, Cell, ResponsiveContainer, Tooltip as ReTooltip, Legend 
-} from 'recharts';
+import { useTheme } from '../context/ThemeContext';
 import toast from 'react-hot-toast';
 
-// Paleta de cores para o gráfico (Tons de Teal e Azul)
-const COLORS = ['#0D9488', '#2DD4BF', '#0F766E', '#99F6E4', '#115E59', '#CCFBF1', '#3B82F6', '#60A5FA'];
-
 export default function History() {
-  const [historyData, setHistoryData] = useState([]);
+  const { theme } = useTheme();
+  
+  // --- ESTADOS DE DADOS ---
+  const [allTransactions, setAllTransactions] = useState([]);
+  const [categories, setCategories] = useState([]); // <--- Lista de categorias para o select
   const [loading, setLoading] = useState(true);
-  const [expandedMonth, setExpandedMonth] = useState(null);
 
+  // --- ESTADOS DE FILTRO ---
+  const [filterPeriod, setFilterPeriod] = useState('MONTH'); // 'MONTH', 'YEAR', 'ALL'
+  const [searchTerm, setSearchTerm] = useState(''); // Filtro de Descrição
+  const [selectedCategory, setSelectedCategory] = useState(''); // Filtro de Categoria (ID)
+
+  // --- CARREGAMENTO ---
   useEffect(() => {
-    async function loadHistory() {
+    async function loadData() {
       try {
-        const response = await api.get('/history/');
-        const data = Array.isArray(response.data) ? response.data : [];
-        setHistoryData(data);
+        // Carregamos Transações E Categorias simultaneamente
+        const [transRes, catRes] = await Promise.all([
+            api.get('/transactions/'),
+            api.get('/categories/')
+        ]);
         
-        // Expande o primeiro mês automaticamente se houver dados
-        if (data.length > 0) {
-            setExpandedMonth(data[0].id);
-        }
+        setAllTransactions(transRes.data);
+        setCategories(catRes.data);
+
       } catch (error) {
-        console.error(error);
-        toast.error("Erro ao carregar histórico.");
-        setHistoryData([]);
+        console.error("Erro ao carregar histórico", error);
+        toast.error("Erro ao carregar dados.");
       } finally {
         setLoading(false);
       }
     }
-    loadHistory();
+    loadData();
   }, []);
 
-  const toggleMonth = (id) => {
-    setExpandedMonth(expandedMonth === id ? null : id);
-  };
+  // --- LÓGICA DE FILTRAGEM ---
+  const filteredTransactions = useMemo(() => {
+    const now = new Date();
+    
+    return allTransactions.filter(t => {
+      const tDate = new Date(t.date + 'T12:00:00'); 
+      
+      // 1. Filtro de Período
+      let passPeriod = true;
+      if (filterPeriod === 'MONTH') {
+        passPeriod = tDate.getMonth() === now.getMonth() && tDate.getFullYear() === now.getFullYear();
+      } else if (filterPeriod === 'YEAR') {
+        passPeriod = tDate.getFullYear() === now.getFullYear();
+      }
 
-  const formatMonthTitle = (dateString) => {
-    if (!dateString) return "";
-    const date = new Date(dateString);
-    const userTimezoneOffset = date.getTimezoneOffset() * 60000;
-    const adjustedDate = new Date(date.getTime() + userTimezoneOffset);
-    return new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric' }).format(adjustedDate);
+      // 2. Filtro de Categoria (Dropdown)
+      let passCategory = true;
+      if (selectedCategory) {
+        // Compara o ID da categoria (convertendo para string para garantir)
+        passCategory = String(t.category) === String(selectedCategory);
+      }
+
+      // 3. Filtro de Descrição (Texto)
+      // Filtra por descrição ou nome da conta (mas não mais pelo nome da categoria, pois já tem filtro dedicado)
+      const searchLower = searchTerm.toLowerCase();
+      const passDescription = searchTerm === '' || 
+                              t.description.toLowerCase().includes(searchLower) ||
+                              (t.account_name && t.account_name.toLowerCase().includes(searchLower));
+
+      return passPeriod && passCategory && passDescription;
+    });
+  }, [allTransactions, filterPeriod, searchTerm, selectedCategory]);
+
+  // Função para limpar filtros de texto e categoria
+  const clearFilters = () => {
+    setSearchTerm('');
+    setSelectedCategory('');
   };
 
   return (
-    <div className="flex w-screen h-screen overflow-hidden font-sans bg-gray-50 dark:bg-[#0F172A] dark:text-gray-100">
+    <div className="flex w-screen h-screen overflow-hidden font-sans bg-gray-50 dark:bg-[#0F172A] dark:text-gray-100 transition-colors duration-300">
       
       <div className="hidden md:block h-full shrink-0 relative z-20">
          <Sidebar />
@@ -62,154 +95,148 @@ export default function History() {
       <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden relative">
         <div className="flex-1 overflow-y-auto w-full scroll-smooth">
             
-            <header className="px-4 py-6 md:px-8 md:py-8 shrink-0">
-                <h1 className="text-3xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                    <BarChart3 className="text-teal-500" /> Histórico Financeiro
-                </h1>
-                <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm">Análise mensal de gastos e receitas.</p>
+            {/* Header */}
+            <header className="px-4 py-6 md:px-8 md:py-8 shrink-0 flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+                <div>
+                    <h1 className="text-3xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                        <HistoryIcon className="text-teal-500" /> Histórico Financeiro
+                    </h1>
+                    <p className="text-gray-500 dark:text-gray-400 mt-1 text-sm">
+                        Analise suas movimentações e entenda seus hábitos.
+                    </p>
+                </div>
+
+                {/* Filtro de Período (Abas) */}
+                <div className="flex items-center gap-1 bg-white dark:bg-slate-800 p-1 rounded-xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-x-auto">
+                    <button onClick={() => setFilterPeriod('MONTH')} className={`px-4 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${filterPeriod === 'MONTH' ? 'bg-teal-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-slate-700'}`}>Este Mês</button>
+                    <button onClick={() => setFilterPeriod('YEAR')} className={`px-4 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${filterPeriod === 'YEAR' ? 'bg-teal-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-slate-700'}`}>Este Ano</button>
+                    <button onClick={() => setFilterPeriod('ALL')} className={`px-4 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${filterPeriod === 'ALL' ? 'bg-teal-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-slate-700'}`}>Tudo</button>
+                </div>
             </header>
 
-            <main className="px-4 md:px-8 pb-32 md:pb-10">
+            <main className="px-4 md:px-8 pb-32 md:pb-10 space-y-6">
                 
-                {loading && (
-                    <div className="text-center py-10 text-gray-400 animate-pulse">Carregando dados...</div>
-                )}
-
-                {!loading && historyData.length === 0 && (
-                    <div className="text-center py-10 text-gray-400">
-                        <Calendar size={48} className="mx-auto mb-3 opacity-50" />
-                        <p>Nenhum histórico disponível ainda.</p>
+                {/* 1. GRÁFICOS (Ocultos se filtro for ALL) */}
+                {filteredTransactions.length > 0 && filterPeriod !== 'ALL' && (
+                    <div className="animate-fade-in-up">
+                        <FinancialCharts transactions={filteredTransactions} period={filterPeriod} />
                     </div>
                 )}
 
-                <div className="space-y-4">
-                    {historyData.map(monthData => {
-                        const isExpanded = expandedMonth === monthData.id;
-                        const percentageUsed = monthData.estimated > 0 
-                            ? Math.min(100, (monthData.expense / monthData.estimated) * 100) 
-                            : 0;
+                {/* 2. LISTA DE TRANSAÇÕES */}
+                <div className="bg-white dark:bg-slate-800 rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm overflow-hidden flex flex-col">
+                    
+                    {/* BARRA DE FILTROS AVANÇADOS */}
+                    <div className="p-4 border-b border-gray-100 dark:border-slate-700 bg-gray-50/50 dark:bg-slate-900/30 flex flex-col md:flex-row gap-3">
+                        
+                        {/* Filtro de Descrição */}
+                        <div className="flex-1 flex items-center gap-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2.5 focus-within:ring-2 focus-within:ring-teal-500 transition-all shadow-sm">
+                            <Search className="text-gray-400" size={18} />
+                            <input 
+                                type="text" 
+                                placeholder="Filtrar por descrição..." 
+                                className="flex-1 bg-transparent outline-none text-gray-700 dark:text-gray-200 placeholder-gray-400 text-sm"
+                                value={searchTerm}
+                                onChange={e => setSearchTerm(e.target.value)}
+                            />
+                            {searchTerm && <button onClick={() => setSearchTerm('')}><X size={14} className="text-gray-400 hover:text-gray-600"/></button>}
+                        </div>
 
-                        return (
-                            <div key={monthData.id} className="bg-white dark:bg-[#1E293B] rounded-2xl border border-gray-100 dark:border-slate-700 shadow-sm overflow-hidden transition-all">
-                                
-                                {/* Cabeçalho do Mês */}
-                                <div 
-                                    onClick={() => toggleMonth(monthData.id)}
-                                    className="p-4 md:p-6 cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-800/50 transition-colors"
-                                >
-                                    <div className="flex justify-between items-center mb-3">
-                                        <h2 className="text-lg md:text-xl font-bold capitalize text-gray-800 dark:text-white">
-                                            {formatMonthTitle(monthData.date)}
-                                        </h2>
-                                        {isExpanded ? <ChevronUp className="text-gray-400" /> : <ChevronDown className="text-gray-400" />}
-                                    </div>
+                        {/* Filtro de Categoria */}
+                        <div className="flex-1 md:max-w-[250px] flex items-center gap-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-xl px-3 py-2.5 focus-within:ring-2 focus-within:ring-teal-500 transition-all shadow-sm relative">
+                            <Filter className="text-gray-400" size={18} />
+                            <select 
+                                className="flex-1 bg-transparent outline-none text-gray-700 dark:text-gray-200 text-sm appearance-none cursor-pointer"
+                                value={selectedCategory}
+                                onChange={e => setSelectedCategory(e.target.value)}
+                            >
+                                <option value="">Todas as Categorias</option>
+                                {categories.map(cat => (
+                                    <option key={cat.id} value={cat.id} className="dark:bg-slate-800">
+                                        {cat.name}
+                                    </option>
+                                ))}
+                            </select>
+                            {/* Ícone de resetar categoria se selecionada */}
+                            {selectedCategory && (
+                                <button onClick={() => setSelectedCategory('')} className="absolute right-8"><X size={14} className="text-gray-400 hover:text-gray-600"/></button>
+                            )}
+                        </div>
 
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-3">
-                                        <div>
-                                            <p className="text-[10px] uppercase font-bold text-emerald-500">Receitas</p>
-                                            <p className="font-bold text-emerald-600 dark:text-emerald-400">R$ {monthData.income.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+                        {/* Botão Limpar Tudo (só aparece se houver filtros ativos) */}
+                        {(searchTerm || selectedCategory) && (
+                            <button 
+                                onClick={clearFilters}
+                                className="px-4 py-2 text-xs font-bold text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition"
+                            >
+                                Limpar
+                            </button>
+                        )}
+                    </div>
+
+                    <div className="divide-y divide-gray-100 dark:divide-slate-700">
+                        {loading ? (
+                            <div className="p-12 text-center"><p className="text-gray-400 animate-pulse">Carregando histórico...</p></div>
+                        ) : filteredTransactions.length === 0 ? (
+                            <div className="p-12 text-center flex flex-col items-center">
+                                <div className="p-4 bg-gray-50 dark:bg-slate-900 rounded-full mb-3 text-gray-400">
+                                    <ShoppingBag size={32} />
+                                </div>
+                                <p className="text-gray-500 dark:text-gray-400 font-medium">Nenhuma movimentação encontrada.</p>
+                                <p className="text-xs text-gray-400 mt-1">Tente ajustar os filtros de busca.</p>
+                            </div>
+                        ) : (
+                            filteredTransactions.map(t => {
+                                const isExpense = t.type === 'EXPENSE';
+                                return (
+                                    <div key={t.id} className="p-4 hover:bg-gray-50 dark:hover:bg-slate-700/50 transition flex justify-between items-center group">
+                                        <div className="flex items-center gap-4">
+                                            {/* Ícone Indicador */}
+                                            <div className={`p-3 rounded-full ${isExpense ? 'bg-rose-50 text-rose-500 dark:bg-rose-900/20' : 'bg-emerald-50 text-emerald-500 dark:bg-emerald-900/20'} group-hover:scale-110 transition-transform`}>
+                                                {isExpense ? <ArrowDownLeft size={20} /> : <ArrowUpRight size={20} />}
+                                            </div>
+                                            
+                                            <div>
+                                                <p className="font-bold text-gray-800 dark:text-gray-200 text-sm md:text-base">{t.description}</p>
+                                                <div className="flex flex-wrap items-center gap-2 mt-1">
+                                                    <span className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                                                        <Calendar size={12}/> {new Date(t.date + 'T12:00:00').toLocaleDateString('pt-BR')}
+                                                    </span>
+                                                    
+                                                    {t.category_name && (
+                                                        <span className="text-[10px] px-2 py-0.5 rounded-md bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 font-medium border border-gray-200 dark:border-slate-600">
+                                                            {t.category_name}
+                                                        </span>
+                                                    )}
+                                                    
+                                                    {t.items && t.items.length > 0 && (
+                                                        <span className="text-[10px] text-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 px-1.5 rounded border border-indigo-100 dark:border-indigo-800 font-bold">
+                                                            {t.items.length} itens
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <p className="text-[10px] uppercase font-bold text-rose-500">Despesas</p>
-                                            <p className="font-bold text-rose-600 dark:text-rose-400">R$ {monthData.expense.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-[10px] uppercase font-bold text-gray-400">Estimado (Fixo)</p>
-                                            <p className="font-bold text-gray-600 dark:text-gray-300">R$ {monthData.estimated.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
-                                        </div>
-                                        <div className="md:text-right">
-                                            <p className="text-[10px] uppercase font-bold text-blue-500">Saldo</p>
-                                            <p className={`font-bold ${monthData.balance >= 0 ? 'text-blue-600 dark:text-blue-400' : 'text-rose-600'}`}>
-                                                R$ {monthData.balance.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
+
+                                        <div className="text-right">
+                                            <span className={`font-bold text-sm md:text-base block ${isExpense ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                                {isExpense ? '- ' : '+ '} R$ {Number(t.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                            </span>
+                                            <p className="text-[10px] text-gray-400 mt-1">
+                                                {t.account_name ? t.account_name : t.invoice ? 'Cartão de Crédito' : 'Outros'}
                                             </p>
                                         </div>
                                     </div>
-
-                                    {/* Barra de Progresso */}
-                                    <div className="relative h-1.5 w-full bg-gray-100 dark:bg-slate-700 rounded-full overflow-hidden">
-                                        <div 
-                                            className={`absolute top-0 left-0 h-full rounded-full transition-all duration-500 ${percentageUsed > 100 ? 'bg-rose-500' : 'bg-teal-500'}`}
-                                            style={{ width: `${percentageUsed}%` }}
-                                        />
-                                    </div>
-                                </div>
-
-                                {/* Detalhes Expandidos */}
-                                {isExpanded && (
-                                    <div className="border-t border-gray-100 dark:border-slate-700 p-4 md:p-6 bg-gray-50/50 dark:bg-slate-900/30 animate-fade-in-down">
-                                        <div className="flex flex-col lg:flex-row gap-8">
-                                            
-                                            {/* GRÁFICO CORRIGIDO */}
-                                            <div className="flex-1 min-h-[300px] flex flex-col items-center justify-center bg-white dark:bg-slate-800 p-4 rounded-2xl border border-gray-100 dark:border-slate-700">
-                                                <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
-                                                    <PieChart size={16}/> Distribuição de Despesas
-                                                </h3>
-                                                
-                                                {monthData.chart_data && monthData.chart_data.length > 0 ? (
-                                                    <div className="w-full h-[250px]">
-                                                        <ResponsiveContainer width="100%" height="100%">
-                                                            <RePieChart>
-                                                                <Pie
-                                                                    data={monthData.chart_data}
-                                                                    cx="50%"
-                                                                    cy="50%"
-                                                                    innerRadius={60}
-                                                                    outerRadius={80}
-                                                                    paddingAngle={5}
-                                                                    dataKey="value"
-                                                                    nameKey="name" // Importante para o Tooltip
-                                                                >
-                                                                    {monthData.chart_data.map((entry, index) => (
-                                                                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="none" />
-                                                                    ))}
-                                                                </Pie>
-                                                                <ReTooltip 
-                                                                    formatter={(value) => `R$ ${value.toLocaleString('pt-BR', {minimumFractionDigits: 2})}`}
-                                                                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                                                />
-                                                                <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                                                            </RePieChart>
-                                                        </ResponsiveContainer>
-                                                    </div>
-                                                ) : (
-                                                    <p className="text-sm text-gray-400 mt-10">Sem despesas categorizadas.</p>
-                                                )}
-                                            </div>
-
-                                            {/* Lista de Transações */}
-                                            <div className="flex-1">
-                                                <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 mb-4">Extrato do Mês</h3>
-                                                <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                                                    {monthData.transactions.map(trans => (
-                                                        <div key={trans.id} className="flex justify-between items-center p-3 bg-white dark:bg-slate-800 rounded-xl border border-gray-100 dark:border-slate-700 shadow-sm">
-                                                            <div className="flex items-center gap-3">
-                                                                <div className={`p-2 rounded-full ${trans.type === 'EXPENSE' ? 'bg-rose-50 text-rose-500 dark:bg-rose-900/20' : 'bg-emerald-50 text-emerald-500 dark:bg-emerald-900/20'}`}>
-                                                                    {trans.type === 'EXPENSE' ? <TrendingDown size={16}/> : <TrendingUp size={16}/>}
-                                                                </div>
-                                                                <div>
-                                                                    <p className="font-bold text-sm text-gray-800 dark:text-gray-200">{trans.description}</p>
-                                                                    <p className="text-[10px] text-gray-500">{new Date(trans.date).toLocaleDateString('pt-BR')} • {trans.category}</p>
-                                                                </div>
-                                                            </div>
-                                                            <span className={`font-bold text-sm ${trans.type === 'EXPENSE' ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                                                                {trans.type === 'EXPENSE' ? '-' : '+'} R$ {trans.value.toLocaleString('pt-BR', {minimumFractionDigits: 2})}
-                                                            </span>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })}
+                                )
+                            })
+                        )}
+                    </div>
                 </div>
+
             </main>
         </div>
       </div>
-
+      
       <MobileMenu />
     </div>
   );

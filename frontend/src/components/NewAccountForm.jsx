@@ -2,7 +2,7 @@ import { useState } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import MoneyInput from './MoneyInput';
-import { Wallet, Save, Trash2, X, Users, Lock } from 'lucide-react';
+import { Wallet, Save, Trash2, X, Users, Lock, TrendingDown } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
 export default function NewAccountForm({ onSuccess, onBack, initialData = null }) {
@@ -10,10 +10,11 @@ export default function NewAccountForm({ onSuccess, onBack, initialData = null }
   
   const [name, setName] = useState(initialData?.name || '');
   const [balance, setBalance] = useState(initialData?.balance || 0);
+  const [limit, setLimit] = useState(initialData?.limit || 0); // <--- NOVO ESTADO
   const [isShared, setIsShared] = useState(initialData?.is_shared || false);
   const [loading, setLoading] = useState(false);
 
-  // --- LÓGICA DE EXCLUSÃO (TOAST) ---
+  // --- LÓGICA DE EXCLUSÃO (MANTIDA IGUAL) ---
 
   async function executeDelete(toastId) {
     toast.dismiss(toastId);
@@ -79,9 +80,16 @@ export default function NewAccountForm({ onSuccess, onBack, initialData = null }
 
     setLoading(true);
     try {
+      // Função auxiliar para garantir float correto (independente se veio string "1.000,00" ou number)
+      const parseCurrency = (val) => {
+          if (typeof val === 'number') return val;
+          return parseFloat(val.toString().replace(/\./g, '').replace(',', '.'));
+      };
+
       const payload = {
         name,
-        balance: parseFloat(balance), // Garante que é número
+        balance: parseCurrency(balance),
+        limit: parseCurrency(limit), // <--- INCLUI O LIMITE
         is_shared: isShared
       };
 
@@ -134,14 +142,36 @@ export default function NewAccountForm({ onSuccess, onBack, initialData = null }
             />
         </div>
 
-        <div>
-            <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Saldo Atual</label>
-            <MoneyInput 
-                value={balance} 
-                onValueChange={setBalance} 
-                placeholder="0,00"
-            />
+        {/* GRID PARA SALDO E LIMITE */}
+        <div className="grid grid-cols-2 gap-4">
+            <div>
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Saldo Atual</label>
+                <MoneyInput 
+                    value={balance} 
+                    onValueChange={setBalance} 
+                    placeholder="0,00"
+                />
+            </div>
+            <div>
+                <div className="flex items-center gap-1 mb-1 ml-1">
+                    <label className="block text-xs font-bold text-gray-500 uppercase">Limite</label>
+                    <span className="text-[10px] bg-gray-100 dark:bg-slate-700 text-gray-500 px-1.5 py-0.5 rounded" title="Cheque Especial">Opcional</span>
+                </div>
+                <MoneyInput 
+                    value={limit} 
+                    onValueChange={setLimit} 
+                    placeholder="0,00"
+                />
+            </div>
         </div>
+        
+        {/* Dica visual sobre o poder de compra */}
+        {(Number(limit) > 0 || typeof limit === 'string' && limit !== '' && limit !== '0,00') && (
+            <div className="flex items-center gap-2 p-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20 text-xs text-emerald-700 dark:text-emerald-400">
+                <TrendingDown size={14} />
+                <span>Poder de compra total: <strong>Saldo + Limite</strong></span>
+            </div>
+        )}
 
         {/* Toggle Compartilhado */}
         <div 

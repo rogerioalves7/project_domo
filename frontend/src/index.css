@@ -70,3 +70,15 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+/* Esconde a barra de rolagem para Chrome, Safari e Opera */
+::-webkit-scrollbar {
+    display: none;
+    width: 0px;
+    background: transparent;
+}
+
+/* Esconde a barra de rolagem para Firefox, IE e Edge */
+* {
+    -ms-overflow-style: none;  /* IE e Edge */
+    scrollbar-width: none;  /* Firefox */
+}

@@ -2,211 +2,162 @@ import { useState, useEffect } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import MoneyInput from './MoneyInput';
-import Input from './Input';
-import { FileText, Calendar, ArrowLeft, Trash2, Tag, Plus } from 'lucide-react';
+import { Trash2, Save } from 'lucide-react';
 
-export default function NewRecurringBillForm({ onSuccess, onBack, onManageCategories, initialData = null }) {
+export default function NewRecurringBillForm({ initialData, onBack, onSuccess, onManageCategories }) {
   const [name, setName] = useState('');
   const [baseValue, setBaseValue] = useState('');
   const [dueDay, setDueDay] = useState('');
-  const [category, setCategory] = useState(''); 
-  
-  const [categoriesList, setCategoriesList] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [category, setCategory] = useState('');
+  const [categories, setCategories] = useState([]);
 
-  // Carrega categorias ao montar
   useEffect(() => {
-    async function loadCats() {
-        try {
-            const response = await api.get('/categories/');
-            setCategoriesList(response.data);
-            
-            if (!initialData && response.data.length > 0 && !category) {
-                setCategory(response.data[0].id);
-            }
-        } catch (e) {
-            console.error("Erro ao carregar categorias", e);
-            toast.error("Erro ao carregar lista de categorias");
-        }
-    }
-    loadCats();
-  }, []);
-
-  // Preenche dados na edição
-  useEffect(() => {
+    loadCategories();
+    // Se vier dados iniciais, é EDIÇÃO
     if (initialData) {
       setName(initialData.name);
       setBaseValue(initialData.base_value);
       setDueDay(initialData.due_day);
-      setCategory(initialData.category ? parseInt(initialData.category) : ''); 
+      setCategory(initialData.category);
     }
   }, [initialData]);
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setLoading(true);
-
+  async function loadCategories() {
     try {
-      const finalValue = typeof baseValue === 'string' ? parseFloat(baseValue.replace(',', '.')) : baseValue;
-
-      const payload = {
-        name,
-        base_value: finalValue || 0,
-        due_day: parseInt(dueDay),
-        category: category ? parseInt(category) : null 
-      };
-
-      if (initialData) {
-        await api.put(`/recurring-bills/${initialData.id}/`, payload);
-        toast.success("Conta atualizada!");
-      } else {
-        await api.post('/recurring-bills/', payload);
-        toast.success("Conta criada!");
-      }
-      onSuccess();
-
+      const response = await api.get('/categories/?type=EXPENSE');
+      setCategories(response.data);
     } catch (error) {
-      console.error(error);
-      toast.error("Erro ao salvar.");
-    } finally {
-      setLoading(false);
+      console.error("Erro ao carregar categorias", error);
     }
   }
 
-  // --- NOVA LÓGICA DE EXCLUSÃO COM TOAST ---
-  function handleDelete() {
-    // Dispara um toast customizado que não some sozinho (duration: Infinity)
-    // até o usuário clicar em uma das opções
-    toast((t) => (
-      <div className="flex flex-col gap-3 min-w-[200px]">
-        <div className="font-medium text-gray-800">
-          Remover esta conta recorrente?
-        </div>
-        <div className="flex gap-2 justify-end">
-          <button
-            onClick={() => {
-              toast.dismiss(t.id); // Fecha o toast
-            }}
-            className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition"
-          >
-            Cancelar
-          </button>
-          <button
-            onClick={() => {
-              toast.dismiss(t.id); // Fecha o toast
-              confirmDelete();     // Executa a exclusão
-            }}
-            className="px-3 py-1.5 text-sm bg-red-500 hover:bg-red-600 text-white rounded-lg transition shadow-sm"
-          >
-            Sim, remover
-          </button>
-        </div>
-      </div>
-    ), { 
-      duration: 5000, 
-      position: 'top-center',
-      style: {
-        background: '#fff',
-        border: '1px solid #e5e7eb',
-        padding: '16px',
-        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+  async function handleSubmit(e) {
+    e.preventDefault();
+    
+    // Tratamento do valor (R$ 1.000,00 -> 1000.00)
+    const formattedValue = typeof baseValue === 'string' 
+      ? parseFloat(baseValue.replace('.', '').replace(',', '.')) 
+      : baseValue;
+
+    const payload = {
+      name,
+      base_value: formattedValue,
+      due_day: parseInt(dueDay),
+      category
+    };
+
+    try {
+      if (initialData) {
+        // EDIÇÃO (PUT)
+        await api.put(`/recurring-bills/${initialData.id}/`, payload);
+        toast.success("Conta fixa atualizada!");
+      } else {
+        // CRIAÇÃO (POST)
+        await api.post('/recurring-bills/', payload);
+        toast.success("Conta fixa criada!");
       }
-    });
+      onSuccess();
+    } catch (error) {
+      console.error(error);
+      toast.error(error.response?.data?.error || "Erro ao salvar.");
+    }
   }
 
-  // Função que realmente chama a API após a confirmação no Toast
-  async function confirmDelete() {
+  async function handleDelete() {
+    if (!confirm("Tem certeza que deseja excluir esta conta fixa? O histórico de pagamentos passados será mantido.")) return;
+
     try {
-        setLoading(true);
-        await api.delete(`/recurring-bills/${initialData.id}/`);
-        toast.success("Recorrência removida.", {
-            icon: '🗑️',
-            style: {
-                borderRadius: '10px',
-                background: '#333',
-                color: '#fff',
-            },
-        });
-        onSuccess();
+      await api.delete(`/recurring-bills/${initialData.id}/`);
+      toast.success("Conta fixa removida!");
+      onSuccess();
     } catch (error) {
-        console.error(error);
-        toast.error("Erro ao remover.");
-        setLoading(false);
+      toast.error("Erro ao excluir.");
     }
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {onBack && (
+        <button type="button" onClick={onBack} className="text-sm text-gray-500 hover:underline mb-2">
+          &larr; Voltar
+        </button>
+      )}
       
-      <div className="flex justify-between items-center mb-2">
-         {onBack && (
-            <button type="button" onClick={onBack} className="flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition">
-                <ArrowLeft size={16} className="mr-1" /> Voltar
-            </button>
-         )}
-         
-         {initialData && (
-            <button 
-                type="button" 
-                onClick={handleDelete} // Agora chama a função do Toast
-                className="text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 p-2 rounded-full transition"
-                title="Excluir"
-            >
-                <Trash2 size={18} />
-            </button>
-         )}
+      <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-xl border border-orange-100 dark:border-orange-900/30 mb-4">
+        <h3 className="font-bold text-orange-700 dark:text-orange-400">
+          {initialData ? `Editar: ${initialData.name}` : 'Nova Conta Fixa'}
+        </h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Isso serve para prever seus gastos mensais automaticamente.
+        </p>
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Nome da Conta</label>
-        <Input type="text" required placeholder="Ex: Aluguel..." value={name} onChange={e => setName(e.target.value)} icon={FileText} />
+        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Conta</label>
+        <input 
+          type="text" 
+          placeholder="Ex: Aluguel, Netflix, Internet"
+          className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-orange-500 dark:text-white"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          required
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Valor Base</label>
-            <MoneyInput value={baseValue} onValueChange={setBaseValue} placeholder="0,00" />
+          <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Valor Base (R$)</label>
+          <MoneyInput value={baseValue} onValueChange={setBaseValue} />
         </div>
         <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Dia Vencimento</label>
-            <Input type="number" min="1" max="31" required placeholder="Ex: 10" value={dueDay} onChange={e => setDueDay(e.target.value)} icon={Calendar} />
+          <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Dia Vencimento</label>
+          <input 
+            type="number" 
+            min="1" max="31"
+            placeholder="Ex: 10"
+            className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-orange-500 dark:text-white"
+            value={dueDay}
+            onChange={e => setDueDay(e.target.value)}
+            required
+          />
         </div>
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Categoria</label>
-        <div className="flex gap-2">
-            <div className="relative flex-1">
-                <Tag className="absolute left-3 top-3.5 text-gray-400 pointer-events-none z-10" size={20} />
-                <select
-                    value={category}
-                    onChange={e => setCategory(e.target.value)}
-                    className="w-full pl-10 pr-4 py-3 rounded-xl appearance-none bg-white border border-gray-200 text-gray-900 dark:bg-slate-900 dark:border-slate-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500"
-                >
-                    <option value="">Sem categoria</option>
-                    {categoriesList.map(cat => (
-                        <option key={cat.id} value={cat.id}>
-                            {cat.name} ({cat.type === 'EXPENSE' ? 'Despesa' : 'Receita'})
-                        </option>
-                    ))}
-                </select>
-            </div>
-            {/* BOTÃO PARA GERENCIAR CATEGORIAS */}
-            <button 
-                type="button"
-                onClick={onManageCategories}
-                className="bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-600 dark:text-gray-300 p-3 rounded-xl transition border border-gray-200 dark:border-slate-700"
-                title="Criar Categoria"
-            >
-                <Plus size={24} />
-            </button>
+        <div className="flex justify-between items-center mb-1">
+            <label className="block text-xs font-bold text-gray-500 uppercase">Categoria</label>
+            <button type="button" onClick={onManageCategories} className="text-[10px] text-teal-600 font-bold hover:underline">Gerenciar</button>
         </div>
+        <select 
+          className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-orange-500 dark:text-white"
+          value={category}
+          onChange={e => setCategory(e.target.value)}
+          required
+        >
+          <option value="">Selecione...</option>
+          {categories.map(cat => (
+            <option key={cat.id} value={cat.id}>{cat.name}</option>
+          ))}
+        </select>
       </div>
 
-      <button type="submit" disabled={loading} className="w-full bg-teal-600 text-white font-bold py-3 rounded-xl hover:bg-teal-500 active:scale-95 transition disabled:opacity-50">
-        {loading ? 'Salvando...' : (initialData ? 'Atualizar' : 'Salvar')}
-      </button>
-
+      <div className="pt-2 flex gap-3">
+        {initialData && (
+          <button 
+            type="button" 
+            onClick={handleDelete}
+            className="flex-1 bg-red-100 text-red-600 font-bold py-3 rounded-xl hover:bg-red-200 transition flex items-center justify-center gap-2"
+          >
+            <Trash2 size={18} /> Excluir
+          </button>
+        )}
+        <button 
+          type="submit" 
+          className="flex-[2] bg-orange-600 text-white font-bold py-3 rounded-xl hover:bg-orange-500 transition flex items-center justify-center gap-2"
+        >
+          <Save size={18} /> {initialData ? 'Salvar Alterações' : 'Criar Conta'}
+        </button>
+      </div>
     </form>
   );
 }
