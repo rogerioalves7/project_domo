@@ -12,7 +12,7 @@ import SecuritySettings from '../components/SecuritySettings';
 import { 
   Settings as SettingsIcon, Users, Moon, Sun, LogOut, Trash2, 
   Shield, Tag, User, Mail, Send, Crown, Calendar, Edit2, Plus, 
-  AlertTriangle, Loader2, X
+  AlertTriangle, Loader2, X, Clock // <--- Adicionado Clock e X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -22,6 +22,7 @@ export default function Settings() {
   
   // --- ESTADOS DE DADOS ---
   const [members, setMembers] = useState([]);
+  const [pendingInvites, setPendingInvites] = useState([]); // <--- NOVO ESTADO
   const [recurringBills, setRecurringBills] = useState([]);
   const [houseInfo, setHouseInfo] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -30,12 +31,13 @@ export default function Settings() {
   // --- ESTADOS DE UI ---
   const [inviteEmail, setInviteEmail] = useState('');
   const [sendingInvite, setSendingInvite] = useState(false);
+  const [cancelingInvite, setCancelingInvite] = useState(null); // ID do convite sendo cancelado
   
   // Modais e Navegação
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [isRecurringModalOpen, setIsRecurringModalOpen] = useState(false);
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
-  const [lastModal, setLastModal] = useState(null); // 'recurring' ou null
+  const [lastModal, setLastModal] = useState(null); 
   
   const [editingBill, setEditingBill] = useState(null);
 
@@ -59,19 +61,22 @@ export default function Settings() {
 
   async function loadSettingsData() {
     try {
-      const [houseRes, membersRes, billsRes] = await Promise.all([
+      // Adicionada a chamada para /invitations/
+      const [houseRes, membersRes, billsRes, invitesRes] = await Promise.all([
         api.get('/houses/'),
         api.get('/members/'),
-        api.get('/recurring-bills/') 
+        api.get('/recurring-bills/'),
+        api.get('/invitations/') // <--- BUSCA CONVITES
       ]);
 
       if (houseRes.data.length > 0) setHouseInfo(houseRes.data[0]);
       setMembers(membersRes.data);
       setRecurringBills(billsRes.data);
+      setPendingInvites(invitesRes.data); // <--- SALVA NO ESTADO
 
     } catch (error) {
       console.error(error);
-      toast.error("Erro ao carregar configurações.");
+      // Não damos toast de erro aqui para não poluir se falhar algo não crítico
     } finally {
       setLoading(false);
     }
@@ -85,11 +90,26 @@ export default function Settings() {
         await api.post('/invitations/', { email: inviteEmail });
         toast.success(`Convite enviado para ${inviteEmail}!`);
         setInviteEmail('');
+        loadSettingsData(); // Recarrega para mostrar na lista
     } catch (error) {
         toast.error(error.response?.data?.error || "Erro ao enviar convite.");
     } finally {
         setSendingInvite(false);
     }
+  }
+
+  // NOVA FUNÇÃO: Cancelar convite
+  async function cancelInvite(inviteId) {
+      setCancelingInvite(inviteId);
+      try {
+          await api.delete(`/invitations/${inviteId}/`);
+          toast.success("Convite cancelado.");
+          setPendingInvites(prev => prev.filter(i => i.id !== inviteId));
+      } catch (error) {
+          toast.error("Erro ao cancelar convite.");
+      } finally {
+          setCancelingInvite(null);
+      }
   }
 
   const handleEditBill = (bill) => { setEditingBill(bill); setIsRecurringModalOpen(true); };
@@ -113,16 +133,15 @@ export default function Settings() {
     ));
   }
 
-  // --- ITEM A: CONFIRMAÇÃO DA ZONA DE PERIGO (TOAST CUSTOMIZADO) ---
+  // --- ZONA DE PERIGO ---
   function handleDangerAction() {
     if (!houseInfo) return;
     const isDelete = amIMaster;
     
-    // Configuração de cores baseada no tema atual
     const toastStyle = theme === 'dark' ? {
-        background: '#1E293B', // slate-800
-        color: '#F8FAFC',      // slate-50
-        border: '1px solid #334155' // slate-700
+        background: '#1E293B', 
+        color: '#F8FAFC',      
+        border: '1px solid #334155' 
     } : {
         background: '#FFFFFF',
         color: '#0F172A',
@@ -163,7 +182,7 @@ export default function Settings() {
       </div>
     ), { 
         duration: 6000,
-        style: toastStyle, // <--- AQUI ESTÁ A CORREÇÃO DO TEMA
+        style: toastStyle,
         position: 'top-center'
     });
   }
@@ -179,7 +198,6 @@ export default function Settings() {
     } catch(e) { toast.error("Erro na operação."); }
   }
 
-  // --- ITEM D: LÓGICA DE NAVEGAÇÃO ENTRE MODAIS ---
   const openCategoryFromRecurring = () => {
       setLastModal('recurring');
       setIsRecurringModalOpen(false);
@@ -262,6 +280,8 @@ export default function Settings() {
                     <h3 className="text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2 mb-4">
                         <Users className="text-blue-500" size={20} /> Membros
                     </h3>
+                    
+                    {/* Lista de Membros Atuais */}
                     <div className="space-y-3 mb-6">
                         {loading ? <p className="text-gray-400 text-sm">Carregando...</p> : members.length === 0 ? <p className="text-gray-400 text-sm">Nenhum membro.</p> : members.map(member => (
                             <div key={member.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-slate-900/50 rounded-xl border border-gray-100 dark:border-slate-700/50">
@@ -279,9 +299,38 @@ export default function Settings() {
                         ))}
                     </div>
 
-                    {/* CONVITE */}
+                    {/* SEÇÃO DE CONVITES (Só Master vê) */}
                     {amIMaster && (
                         <div className="pt-4 border-t border-gray-100 dark:border-slate-700 block">
+                            
+                            {/* Lista de Convites Pendentes */}
+                            {pendingInvites.length > 0 && (
+                                <div className="mb-4">
+                                    <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-2 flex items-center gap-1">
+                                        <Clock size={12} /> Convites Pendentes
+                                    </label>
+                                    <div className="space-y-2">
+                                        {pendingInvites.map(invite => (
+                                            <div key={invite.id} className="flex justify-between items-center p-2.5 bg-yellow-50 dark:bg-yellow-900/10 border border-yellow-100 dark:border-yellow-900/20 rounded-lg">
+                                                <div className="flex items-center gap-2">
+                                                    <Mail size={14} className="text-yellow-600 dark:text-yellow-500"/>
+                                                    <span className="text-sm text-gray-700 dark:text-gray-300">{invite.email}</span>
+                                                </div>
+                                                <button 
+                                                    onClick={() => cancelInvite(invite.id)}
+                                                    disabled={cancelingInvite === invite.id}
+                                                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition"
+                                                    title="Cancelar convite"
+                                                >
+                                                    {cancelingInvite === invite.id ? <Loader2 size={14} className="animate-spin"/> : <X size={14}/>}
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Formulário de Novo Convite */}
                             <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-2 flex items-center gap-1">
                                 <Mail size={12} /> Convidar Novo Membro
                             </label>
@@ -326,14 +375,12 @@ export default function Settings() {
                             <tbody className="divide-y divide-gray-100 dark:divide-slate-700">
                                 {recurringBills.map(bill => (
                                     <tr key={bill.id}>
-                                        {/* CORREÇÃO AQUI: Adicionado text-gray-700 para modo claro */}
                                         <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-200">
                                             {bill.name}
                                         </td>
                                         <td className="px-4 py-3 text-gray-500">
                                             Dia {bill.due_day}
                                         </td>
-                                        {/* CORREÇÃO AQUI: Adicionado text-gray-700 para modo claro */}
                                         <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-200">
                                             R$ {Number(bill.base_value).toLocaleString('pt-BR', {minimumFractionDigits: 2})}
                                         </td>
@@ -355,8 +402,8 @@ export default function Settings() {
                         </table>
                     </div>
                 </div>
-                
-                {/* 5. ZONA DE PERIGO (COM DISCLAIMER RESTAURADO) */}
+
+                {/* 5. ZONA DE PERIGO */}
                 <div className="bg-red-50 dark:bg-red-900/10 rounded-2xl p-6 border border-red-100 dark:border-red-900/20 shadow-sm">
                     <h3 className="text-lg font-bold text-red-700 dark:text-red-400 flex items-center gap-2 mb-2"><AlertTriangle size={20} /> Zona de Perigo</h3>
                     <p className="text-sm text-red-600/80 dark:text-red-400/70 mb-4">
@@ -383,7 +430,7 @@ export default function Settings() {
           <NewRecurringBillForm 
             initialData={editingBill} 
             onSuccess={() => { setIsRecurringModalOpen(false); loadSettingsData(); }} 
-            onManageCategories={openCategoryFromRecurring} // <--- Função dedicada
+            onManageCategories={openCategoryFromRecurring} 
           />
       </Modal>
 

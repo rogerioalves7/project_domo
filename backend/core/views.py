@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 import datetime
 from dateutil.relativedelta import relativedelta
 
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, status, generics
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.views import APIView
@@ -35,7 +35,7 @@ from .serializers import (
     ProductSerializer, InventoryItemSerializer, ShoppingListSerializer, 
     RecurringBillSerializer, CategorySerializer, TransactionItemSerializer, 
     HouseInvitationSerializer, PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
-    ChangePasswordSerializer, ChangeEmailSerializer
+    ChangePasswordSerializer, ChangeEmailSerializer, UserSerializer
 )
 
 User = get_user_model()
@@ -344,14 +344,29 @@ class TransactionViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if hasattr(user, 'house_member') and user.house_member.house:
-            house = user.house_member.house
-            return Transaction.objects.filter(house=house).filter(
-                (Q(account__isnull=True) | Q(account__is_shared=True) | Q(account__owner=user))
-            ).filter(
-                (Q(invoice__isnull=True) | Q(invoice__card__is_shared=True) | Q(invoice__card__owner=user))
-            ).order_by('-date', '-id')
-        return Transaction.objects.none()
+        
+        # 1. Descubro quais casas EU participo
+        my_house_ids = HouseMember.objects.filter(user=user).values_list('house_id', flat=True)
+
+        # 2. Crio uma lista de "Pessoas Permitidas" (Meus vizinhos de casa)
+        # Se eu moro na casa X, posso ver transações COMPARTILHADAS de quem também mora na casa X.
+        allowed_users_ids = HouseMember.objects.filter(
+            house_id__in=my_house_ids
+        ).values_list('user_id', flat=True)
+
+        # 3. O Filtro Definitivo
+        return Transaction.objects.filter(
+            # SITUAÇÃO A: A transação é MINHA
+            # Se eu sou o dono, vejo tudo (privado, público, secreto...)
+            Q(account__owner=user) | 
+            
+            # SITUAÇÃO B: A transação é DE OUTRO MEMBRO
+            # Aqui aplicamos a sua regra estrita:
+            Q(
+                is_shared=True,  # <--- O CADEADO: Só passa se foi marcada como pública na hora da compra
+                account__owner__id__in=allowed_users_ids # <--- E o dono da conta mora comigo
+            )
+        ).distinct().order_by('-date', '-created_at')
 
     def create(self, request, *args, **kwargs):
         data = request.data
@@ -745,56 +760,56 @@ class InvitationViewSet(viewsets.ViewSet):
         except HouseInvitation.DoesNotExist:
             return Response({'error': 'Convite inválido.'}, status=404)
 
-class RegisterView(APIView):
-    permission_classes = [AllowAny] 
+class RegisterView(generics.CreateAPIView):
+    serializer_class = UserSerializer
+    permission_classes = [AllowAny]
 
-    def post(self, request):
-        username = request.data.get('username')
-        email = request.data.get('email')
-        password = request.data.get('password')
-        invitation_token = request.data.get('invitation_token') 
+    @db_transaction.atomic  # Garante que se der erro, desfaz tudo (rollback)
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        # 1. Cria o Usuário (O Signal vai rodar aqui e criar a Casa Padrão)
+        user = serializer.save()
+        
+        # 2. Verifica se existe convite para o e-mail cadastrado
+        email = user.email
+        pending_invite = HouseInvitation.objects.filter(email=email).first()
 
-        if not username or not password or not email:
-            return Response({'error': 'Preencha todos os campos.'}, status=status.HTTP_400_BAD_REQUEST)
+        if pending_invite:
+            # --- CENÁRIO: USUÁRIO COM CONVITE ---
+            # O usuário já tem um HouseMember criado pelo Signal apontando para uma casa nova.
+            # Vamos atualizar esse registro para apontar para a casa do convite.
 
-        # VALIDAÇÃO DO CONVITE (Porteiro)
-        if invitation_token:
-            try:
-                invite = HouseInvitation.objects.get(id=invitation_token, accepted=False)
-                if invite.email != email:
-                    return Response({'error': f'O convite é para {invite.email}, não {email}.'}, status=400)
-            except (ObjectDoesNotExist, ValueError):
-                return Response({'error': 'Convite inválido.'}, status=400)
+            # Opcional: Se quiser limpar a casa "vazia" que o signal criou:
+            default_member_record = HouseMember.objects.filter(user=user).first()
+            if default_member_record:
+                orphaned_house = default_member_record.house
+                # Se for uma casa recém criada e vazia, deletamos para não sujar o banco
+                if orphaned_house.members.count() <= 1: 
+                    orphaned_house.delete() # Isso geralmente deleta o member junto via CASCADE
 
-        if User.objects.filter(username=username).exists():
-            return Response({'error': 'Usuário já existe.'}, status=400)
-        if User.objects.filter(email=email).exists():
-            return Response({'error': 'E-mail já cadastrado.'}, status=400)
+            # Cria ou Atualiza o vínculo para a Casa do Convite
+            # O update_or_create resolve o erro de "Duplicate Key"
+            HouseMember.objects.update_or_create(
+                user=user,
+                defaults={
+                    'house': pending_invite.house, # A casa que convidou
+                    'role': 'MEMBER' # Ou o papel definido no convite
+                }
+            )
 
-        try:
-            validate_password(password)
-        except ValidationError as e:
-            return Response({'error': ' '.join(e.messages)}, status=400)
+            # Deleta o convite pois já foi usado
+            pending_invite.delete()
 
-        try:
-            user = User.objects.create_user(username=username, email=email, password=password)
-            
-            # Cria casa padrão apenas se não houver convite (signals geralmente criam, mas garantimos aqui)
-            if not HouseMember.objects.filter(user=user).exists():
-                house = House.objects.create(name=f"Casa de {username}")
-                HouseMember.objects.create(user=user, house=house, role='ADMIN')
+        # else:
+            # --- CENÁRIO: USUÁRIO SEM CONVITE ---
+            # O Signal já criou a Casa Nova e vinculou o usuário como MASTER.
+            # Não precisamos fazer nada.
 
-            token, _ = Token.objects.get_or_create(user=user)
-            return Response({
-                'token': token.key, 'user_id': user.pk,
-                'username': user.username, 'email': user.email
-            }, status=status.HTTP_201_CREATED)
-            
-        except IntegrityError:
-            return Response({'error': 'Erro de integridade.'}, status=400)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
-
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+    
 class CustomAuthToken(ObtainAuthToken):
     def post(self, request, *args, **kwargs):
         serializer = self.serializer_class(data=request.data, context={'request': request})
@@ -929,3 +944,19 @@ class AuthViewSet(viewsets.ViewSet):
             user.save()
             return Response({'status': 'E-mail atualizado.'})
         return Response(serializer.errors, status=400)
+    
+class CurrentUserView(APIView):
+    """
+    Retorna os dados do usuário logado diretamente do banco de dados.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        return Response({
+            'id': user.id,
+            'username': user.username,
+            'first_name': user.first_name,
+            'email': user.email,
+            'full_name': user.get_full_name()
+        })

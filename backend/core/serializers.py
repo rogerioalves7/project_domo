@@ -10,9 +10,21 @@ from .models import (
 # --- USUÁRIOS E CASA ---
 
 class UserSerializer(serializers.ModelSerializer):
+    first_name = serializers.CharField(required=True) # Nome Real
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'email']
+        fields = ('id', 'username', 'first_name', 'email', 'password')
+        extra_kwargs = {'password': {'write_only': True}}
+
+    def create(self, validated_data):
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            email=validated_data['email'],
+            password=validated_data['password'],
+            first_name=validated_data['first_name']
+        )
+        return user
 
 class HouseSerializer(serializers.ModelSerializer):
     class Meta:
@@ -108,22 +120,39 @@ class TransactionItemSerializer(serializers.ModelSerializer):
         fields = ['id', 'description', 'value', 'quantity']
 
 class TransactionSerializer(serializers.ModelSerializer):
+    # Campos existentes...
     category_name = serializers.CharField(source='category.name', read_only=True)
-    account_name = serializers.CharField(source='account.name', read_only=True)
     
-    # Campo calculado para identificar o cartão (usado no filtro do histórico)
-    card_id = serializers.IntegerField(source='invoice.card.id', read_only=True, allow_null=True)
+    # NOVOS CAMPOS PARA O CARD:
+    owner_name = serializers.SerializerMethodField()
+    source_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Transaction
         fields = [
             'id', 'description', 'value', 'type', 'date', 
             'category', 'category_name', 
-            'account', 'account_name', 
-            'card_id', 
-            'invoice', 'items', 'recurring_bill' 
-            # REMOVIDO: 'installments'
+            'is_shared',
+            'owner_name', # <--- Adicione
+            'source_name' # <--- Adicione
+            # ... mantenha os outros campos (account, invoice, etc)
         ]
+
+    def get_owner_name(self, obj):
+        # Retorna o Primeiro Nome de quem fez a transação
+        if obj.account:
+            return obj.account.owner.first_name
+        if obj.invoice and obj.invoice.card:
+            return obj.invoice.card.user.first_name # Ajuste 'user' para 'owner' se for o caso no seu model Card
+        return "Desconhecido"
+
+    def get_source_name(self, obj):
+        # Retorna o nome da Conta ou do Cartão
+        if obj.account:
+            return obj.account.name
+        if obj.invoice and obj.invoice.card:
+            return f"Cartão {obj.invoice.card.name}"
+        return "Outros"
 
 # --- ESTOQUE E COMPRAS ---
 

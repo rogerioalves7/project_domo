@@ -1,216 +1,197 @@
-import { useState, useContext, useEffect } from 'react';
-import { useNavigate, useSearchParams, Link } from 'react-router-dom'; // <--- ADICIONADO: Link
+import { useState, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
-import Input from '../components/Input';
-import logoImg from '../assets/logo.png'; 
-import { Lock, User, Loader2, UserPlus, Mail, LogIn } from 'lucide-react'; 
+import { useNavigate } from 'react-router-dom';
+import logoImg from '../assets/logo.png';
+import toast from 'react-hot-toast';
+import { User, Mail, Lock, ArrowRight, Loader2, AtSign } from 'lucide-react';
 
 export default function Login() {
-    // Estados do Formulário e UI
-    const [isLogin, setIsLogin] = useState(true); 
-    const [username, setUsername] = useState('');
-    const [email, setEmail] = useState(''); 
-    const [password, setPassword] = useState('');
-    const [loading, setLoading] = useState(false);
+  const { signIn, signUp } = useContext(AuthContext);
+  const navigate = useNavigate();
+  
+  const [isLogin, setIsLogin] = useState(true);
+  const [loading, setLoading] = useState(false);
 
-    // Hooks e Contexto
-    const { signIn, signUp } = useContext(AuthContext);
-    const navigate = useNavigate();
-    
-    // Leitura do Token de Convite da URL
-    const [searchParams] = useSearchParams();
-    const inviteToken = searchParams.get('invite');
+  const [fullName, setFullName] = useState(''); 
+  const [username, setUsername] = useState(''); 
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
 
-    // --- EFEITO: CONFIGURA AMBIENTE SE HOUVER CONVITE ---
-    useEffect(() => {
-        if (inviteToken) {
-            setIsLogin(false); 
-            if (inviteToken !== 'true') {
-                localStorage.setItem('pending_invite_token', inviteToken);
-            }
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setLoading(true);
+
+    try {
+      if (isLogin) {
+        await signIn({ username, password });
+        navigate('/dashboard');
+      } else {
+        if (username.includes(' ')) {
+            toast.error("O usuário não pode conter espaços.");
+            setLoading(false);
+            return;
         }
-    }, [inviteToken]);
 
-    // --- HANDLERS ---
-    async function handleSubmit(e) {
-        e.preventDefault();
+        await signUp({ 
+            username,
+            first_name: fullName,
+            email, 
+            password 
+        });
         
-        if (!username || !password || (!isLogin && !email)) return;
-
-        setLoading(true);
+        toast.success("Conta criada! Entrando...");
 
         try {
-            if (isLogin) {
-                await signIn({ username, password });
-            } else {
-                await signUp({ 
-                    username, 
-                    email, 
-                    password
-                });
-            }
-            navigate('/app');
-        } catch (error) {
-            // Erro já tratado no Contexto (Toast)
-        } finally {
-            setLoading(false);
+            await signIn({ username, password });
+            navigate('/dashboard');
+        } catch (loginError) {
+            console.error(loginError);
+            toast.error("Erro no login automático.");
+            setIsLogin(true);
         }
+      }
+    } catch (error) {
+      console.error(error);
+      const msg = error.response?.data?.detail || "Erro na operação.";
+      toast.error(msg);
+    } finally {
+      setLoading(false);
     }
+  }
 
-    const toggleView = () => {
-        setIsLogin(!isLogin);
-        setPassword('');
-        setEmail('');
-    }
+  return (
+    <div className="fixed inset-0 z-50 w-full h-full bg-white dark:bg-[#0F172A] grid grid-cols-1 lg:grid-cols-2 overflow-hidden">
+      
+      {/* --- LADO ESQUERDO (HERO - DESKTOP) --- */}
+      <div className="hidden lg:flex relative bg-teal-600 flex-col justify-between p-12 h-full w-full">
+        <div className="absolute inset-0 opacity-10 pointer-events-none" 
+             style={{ backgroundImage: 'radial-gradient(#fff 2px, transparent 2px)', backgroundSize: '30px 30px' }}>
+        </div>
+        
+        <div className="relative z-10 mt-10">
+            <div className="bg-white p-6 rounded-3xl shadow-2xl w-fit mb-12 mx-auto">
+                <img src={logoImg} alt="Domo" className="h-36 w-auto" />
+            </div>
+            <h1 className="text-5xl font-extrabold text-white mb-6 leading-tight tracking-tight">
+                Controle financeiro <br/> 
+                <span className="text-teal-200">inteligente e simples.</span>
+            </h1>
+            <p className="text-teal-50 text-lg max-w-md leading-relaxed">
+                Junte-se ao Domo para gerenciar despesas compartilhadas, cartões e contas da casa em um único lugar.
+            </p>
+        </div>
 
-    const title = isLogin ? 'Bem-vindo de volta' : 'Crie sua nova conta';
-    const subtitle = isLogin ? 'Insira suas credenciais para acessar.' : (inviteToken ? 'Preencha os dados para aceitar o convite e se cadastrar.' : 'Comece a organizar suas finanças e estoque.');
+        <div className="relative z-10 text-teal-200 text-sm font-medium">
+            © {new Date().getFullYear()} Project Domo. Todos os direitos reservados.
+        </div>
+      </div>
 
-    return (
-        <div className="flex w-screen h-screen overflow-hidden bg-gray-50 dark:bg-[#0F172A]">
-
-            {/* --- LADO ESQUERDO (Visual / Desktop) --- */}
-            <div className="hidden md:flex w-1/2 lg:w-3/5 h-full bg-gradient-to-br from-teal-600 to-blue-800 items-center justify-center relative overflow-hidden">
-                <div className="absolute top-[-20%] left-[-10%] w-[500px] h-[500px] bg-white opacity-5 rounded-full blur-3xl animate-pulse"></div>
-                <div className="absolute bottom-[-10%] right-[-10%] w-[600px] h-[600px] bg-blue-500 opacity-20 rounded-full blur-3xl"></div>
-
-                <div className="relative z-10 flex flex-col items-center text-white animate-fade-in-up p-12 text-center">
-                    <div className="mb-8 drop-shadow-2xl">
-                        <img 
-                            src={logoImg} 
-                            alt="Logo Domo" 
-                            className="h-32 w-auto object-contain"
-                        />
+      {/* --- LADO DIREITO (FORMULÁRIO) --- */}
+      <div className="h-full w-full bg-gray-50 dark:bg-[#0F172A] overflow-y-auto relative">
+        
+        <div className="min-h-full w-full flex flex-col p-6 md:p-12">
+            
+            <div className="flex-1 flex flex-col justify-center w-full max-w-md mx-auto space-y-8">
+                
+                {/* --- LOGO MOBILE (AUMENTADO) --- */}
+                <div className="lg:hidden text-center mb-6 mt-4">
+                    {/* AUMENTO: p-5 (era p-3), rounded-3xl (era 2xl) */}
+                    <div className="bg-white p-5 rounded-3xl shadow-xl w-fit mx-auto mb-6">
+                        {/* AUMENTO: h-28 (112px) - era h-10 (40px) */}
+                        <img src={logoImg} alt="Domo" className="h-28 w-auto" />
                     </div>
-                    <p className="text-blue-100 text-lg lg:text-xl font-medium max-w-lg leading-relaxed">
-                        Assuma o controle da sua casa. <br/>
-                        Gestão financeira e estoque em um só lugar.
+                </div>
+
+                <div className="text-center lg:text-left">
+                    <h2 className="text-3xl font-bold text-gray-900 dark:text-white tracking-tight">
+                        {isLogin ? 'Bem-vindo de volta' : 'Crie sua conta'}
+                    </h2>
+                    <p className="mt-2 text-gray-500 dark:text-gray-400">
+                        {isLogin ? 'Entre com suas credenciais.' : 'Preencha os dados abaixo.'}
                     </p>
                 </div>
-            </div>
 
-            {/* --- LADO DIREITO (Formulário) --- */}
-            <div className="w-full md:w-1/2 lg:w-2/5 h-full flex flex-col justify-center items-center p-8 lg:p-12 transition-colors duration-300 overflow-y-auto relative">
-
-                <div className="w-full max-w-sm space-y-8">
+                <form onSubmit={handleSubmit} className="space-y-5 bg-white dark:bg-slate-800 p-6 sm:p-8 rounded-2xl shadow-sm border border-gray-100 dark:border-slate-700 w-full">
                     
-                    {/* Cabeçalho Mobile */}
-                    <div className="md:hidden flex flex-col items-center mb-8 mt-10">
-                        <div className="mb-4 drop-shadow-lg">
-                            <img src={logoImg} alt="Logo Domo" className="h-16 w-auto object-contain" />
-                        </div>
-                        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Domo</h1>
-                    </div>
-
-                    {/* Alerta de Convite */}
-                    {inviteToken && (
-                        <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-xl text-yellow-700 dark:bg-yellow-900/20 dark:border-yellow-800 text-sm font-medium text-center">
-                            👋 Você tem um convite pendente! <br/>
-                            Crie sua conta ou faça login para entrar na casa.
-                        </div>
-                    )}
-                    
-                    {/* Boas vindas */}
-                    <div className="text-center md:text-left">
-                        <h2 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white tracking-tight">
-                            {title}
-                        </h2>
-                        <p className="text-gray-500 dark:text-gray-400 mt-2 text-sm md:text-base">
-                            {subtitle}
-                        </p>
-                    </div>
-
-                    <form onSubmit={handleSubmit} className="space-y-6">
-
-                        <div className="space-y-4">
+                    {!isLogin && (
+                        <>
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 ml-1">Usuário</label>
-                                <Input
-                                    type="text"
-                                    placeholder="Seu nome de usuário"
-                                    value={username}
-                                    onChange={(e) => setUsername(e.target.value)}
-                                    required
-                                    icon={User}
-                                    autoFocus
-                                />
-                            </div>
-
-                            {!isLogin && (
-                                <div className="animate-fade-in-down">
-                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5 ml-1">E-mail</label>
-                                    <Input
-                                        type="email"
-                                        placeholder="seu@email.com"
-                                        value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
-                                        required
-                                        icon={Mail} 
+                                <label className="block text-xs font-bold text-gray-600 dark:text-gray-300 uppercase mb-1.5 ml-1">Nome Completo</label>
+                                <div className="relative">
+                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400"><User size={18} /></div>
+                                    <input 
+                                        type="text" placeholder="Ex: Jéssica Leite" 
+                                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white transition-all text-sm font-medium"
+                                        value={fullName} onChange={e => setFullName(e.target.value)} required={!isLogin}
                                     />
                                 </div>
-                            )}
-
-                            <div>
-                                <div className="flex justify-between items-center mb-1.5 ml-1">
-                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Senha</label>
-                                    
-                                    {/* --- CORREÇÃO AQUI: Link para Esqueci Senha --- */}
-                                    {isLogin && (
-                                        <Link 
-                                            to="/forgot-password" 
-                                            className="text-xs font-semibold text-teal-600 hover:text-teal-500 dark:text-teal-400 hover:underline"
-                                        >
-                                            Esqueceu?
-                                        </Link>
-                                    )}
-                                    {/* ----------------------------------------------- */}
-
-                                </div>
-                                <Input
-                                    type="password"
-                                    placeholder="••••••••"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    required
-                                    icon={Lock}
-                                />
                             </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-600 dark:text-gray-300 uppercase mb-1.5 ml-1">E-mail</label>
+                                <div className="relative">
+                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400"><Mail size={18} /></div>
+                                    <input 
+                                        type="email" placeholder="seu@email.com" 
+                                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white transition-all text-sm font-medium"
+                                        value={email} onChange={e => setEmail(e.target.value)} required={!isLogin}
+                                    />
+                                </div>
+                            </div>
+                        </>
+                    )}
+
+                    <div>
+                        <label className="block text-xs font-bold text-gray-600 dark:text-gray-300 uppercase mb-1.5 ml-1">
+                            {isLogin ? 'Usuário' : 'Criar Usuário (Sem espaços)'}
+                        </label>
+                        <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400"><AtSign size={18} /></div>
+                            <input 
+                                type="text" placeholder="Ex: jessica.leite" 
+                                className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white transition-all text-sm font-medium"
+                                value={username} onChange={e => setUsername(e.target.value.toLowerCase().replace(/\s/g, ''))} required
+                            />
                         </div>
-
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="group w-full bg-teal-600 hover:bg-teal-500 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-teal-500/30 flex items-center justify-center transition-all active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed"
-                        >
-                            {loading ? (
-                                <Loader2 className="animate-spin h-5 w-5" />
-                            ) : (
-                                isLogin ? (
-                                    <>Entrar <LogIn className="ml-2 h-5 w-5 group-hover:translate-x-1 transition-transform" /></>
-                                ) : (
-                                    <>Criar Conta <UserPlus className="ml-2 h-5 w-5" /></>
-                                )
-                            )}
-                        </button>
-                    </form>
-
-                    <div className="mt-8 text-center pb-8 md:pb-0">
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                            {isLogin ? 'Ainda não possui uma conta?' : 'Já tem uma conta?'}
-                            {' '}
-                            <button onClick={toggleView} className="text-teal-600 dark:text-teal-400 font-semibold hover:underline transition-colors">
-                                {isLogin ? 'Criar nova conta' : 'Fazer login'}
-                            </button>
-                        </p>
                     </div>
-                </div>
 
-                {/* Footer */}
-                <div className="md:absolute bottom-6 text-center text-xs text-gray-400 dark:text-slate-600 w-full">
-                    © 2025 Project Domo. Todos os direitos reservados.
-                </div>
+                    <div>
+                        <label className="block text-xs font-bold text-gray-600 dark:text-gray-300 uppercase mb-1.5 ml-1">Senha</label>
+                        <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400"><Lock size={18} /></div>
+                            <input 
+                                type="password" placeholder="******" 
+                                className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white transition-all text-sm font-medium"
+                                value={password} onChange={e => setPassword(e.target.value)} required
+                            />
+                        </div>
+                    </div>
 
+                    <button 
+                        type="submit" disabled={loading}
+                        className="w-full bg-teal-600 hover:bg-teal-500 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-teal-500/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 mt-2"
+                    >
+                        {loading ? <Loader2 className="animate-spin" /> : (isLogin ? 'Acessar Sistema' : 'Criar Conta')}
+                        {!loading && <ArrowRight size={18} />}
+                    </button>
+                </form>
+
+                <div className="text-center">
+                    <button 
+                        onClick={() => { setIsLogin(!isLogin); setFullName(''); setUsername(''); setEmail(''); setPassword(''); }}
+                        className="text-sm font-semibold text-teal-600 dark:text-teal-400 hover:text-teal-700 hover:underline transition"
+                    >
+                        {isLogin ? 'Ainda não tem conta? Cadastre-se' : 'Já tem cadastro? Faça Login'}
+                    </button>
+                </div>
             </div>
+
+            {/* RODAPÉ MOBILE */}
+            <div className="mt-8 text-center text-xs text-gray-400 dark:text-gray-500 lg:hidden pb-2">
+                © {new Date().getFullYear()} Project Domo. Todos os direitos reservados.
+            </div>
+
         </div>
-    );
+      </div>
+    </div>
+  );
 }

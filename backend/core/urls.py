@@ -6,7 +6,7 @@ from .views import (
     TransactionViewSet, AccountViewSet, RecurringBillViewSet, 
     CreditCardViewSet, InvoiceViewSet, InvitationViewSet,
     AuthViewSet, HistoryViewSet, ProductViewSet, InventoryViewSet, 
-    ShoppingListViewSet,
+    ShoppingListViewSet, CurrentUserView,
     
     # Views soltas (Login/Registro)
     CustomAuthToken, RegisterView
@@ -44,4 +44,5 @@ urlpatterns = [
 
     # 3. Inclui as rotas do Router
     path('', include(router.urls)),
+    path('me/', CurrentUserView.as_view(), name='current-user'),
 ]

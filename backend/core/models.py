@@ -93,6 +93,10 @@ class RecurringBill(models.Model):
     def __str__(self):
         return self.name
 
+from django.db import models
+from django.utils import timezone
+# Certifique-se de importar suas outras models (House, Category, Account, etc)
+
 class Transaction(models.Model):
     TYPES = [('INCOME', 'Receita'), ('EXPENSE', 'Despesa')]
 
@@ -103,6 +107,12 @@ class Transaction(models.Model):
     type = models.CharField(max_length=10, choices=TYPES)
     
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True)
+    is_shared = models.BooleanField(default=False)
+    
+    # --- NOVOS CAMPOS DE AUDITORIA ---
+    # Resolve o erro de order_by('-created_at')
+    created_at = models.DateTimeField(auto_now_add=True) 
+    updated_at = models.DateTimeField(auto_now=True)
     
     # Relacionamentos opcionais
     account = models.ForeignKey(Account, on_delete=models.CASCADE, null=True, blank=True, related_name='transactions')
@@ -113,21 +123,26 @@ class Transaction(models.Model):
         # 1. Verifica se é uma criação nova (não tem ID ainda)
         is_new = self.pk is None
         
-        # 2. Salva a transação primeiro para garantir que está tudo ok
+        # 2. SE FOR NOVO: Define a privacidade automaticamente antes de salvar
+        if is_new:
+            # Prioridade 1: Herdar da Conta Bancária
+            if self.account:
+                self.is_shared = self.account.is_shared
+            
+            # Prioridade 2: Herdar do Cartão de Crédito (via Fatura)
+            elif self.invoice and self.invoice.card:
+                self.is_shared = self.invoice.card.is_shared
+        
+        # 3. Salva a transação no banco
         super().save(*args, **kwargs)
 
-        # 3. Lógica de Atualização de Saldo (Apenas se for novo e tiver conta vinculada)
-        """if is_new and self.account:
+        # 4. Lógica de Atualização de Saldo (Opcional, se você estiver usando)
+        if is_new and self.account:
             if self.type == 'EXPENSE':
                 self.account.balance -= self.value
             elif self.type == 'INCOME':
                 self.account.balance += self.value
-            
-            # Salva a alteração na conta
-            self.account.save()"""
-
-    def __str__(self):
-        return f"{self.description} - R$ {self.value}"
+            self.account.save()
 
 # --- MÓDULO ESTOQUE ---
 

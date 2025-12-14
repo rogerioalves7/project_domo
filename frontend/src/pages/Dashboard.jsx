@@ -15,21 +15,24 @@ import logoImg from '../assets/logo.png';
 import { 
   Plus, ArrowUpCircle, ArrowDownCircle, CreditCard, Wallet, 
   Sun, Moon, Calendar, TrendingUp, ArrowUpRight, ArrowDownLeft, 
-  ShoppingBag, CheckCircle2, AlertCircle, FileText, Lock, Users
+  ShoppingBag, CheckCircle2, AlertCircle, FileText, Lock, Users, User 
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function Dashboard() {
-  const { user } = useContext(AuthContext);
+  const { user } = useContext(AuthContext); // Dados do login (backup)
   const { theme, toggleTheme } = useTheme();
   
+  // --- ESTADO PARA O USUÁRIO DO BANCO ---
+  const [currentUser, setCurrentUser] = useState(null);
+
   const [accounts, setAccounts] = useState([]);
   const [cards, setCards] = useState([]);
   const [recurringBills, setRecurringBills] = useState([]);
   const [recentTransactions, setRecentTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  // --- ESTADOS ---
+  // --- ESTADOS MODAL ---
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalView, setModalView] = useState('MENU'); 
   const [lastModalView, setLastModalView] = useState(null);
@@ -60,16 +63,19 @@ export default function Dashboard() {
   async function loadDashboardData() {
     setLoading(true);
     try {
-      const [accRes, cardRes, billRes, transRes] = await Promise.all([
+      // ADICIONADO: api.get('/me/') na Promise.all
+      const [accRes, cardRes, billRes, transRes, userRes] = await Promise.all([
         api.get('/accounts/'),
         api.get('/credit-cards/'),
         api.get('/recurring-bills/'),
-        api.get('/transactions/')
+        api.get('/transactions/'),
+        api.get('/me/') // <--- Busca dados frescos do usuário
       ]);
 
       setAccounts(accRes.data);
       setCards(cardRes.data);
       setRecurringBills(billRes.data);
+      setCurrentUser(userRes.data); // <--- Salva no estado
 
       const allTrans = transRes.data;
       const recent = allTrans
@@ -85,7 +91,10 @@ export default function Dashboard() {
 
     } catch (error) {
       console.error("Erro ao buscar dados", error);
-      toast.error("Erro ao carregar dados.");
+      // Não quebra a aplicação se o /me/ falhar, usa o contexto
+      if (error.response?.status !== 404) {
+          toast.error("Erro ao carregar alguns dados.");
+      }
     } finally {
       setLoading(false);
     }
@@ -200,7 +209,10 @@ export default function Dashboard() {
   const handleEditGeneric = (item, view) => { setEditingItem(item); setModalView(view); setIsModalOpen(true); };
   const handleNewTransaction = (type) => { setTransactionType(type); setModalView('NEW_TRANSACTION'); setIsModalOpen(true); };
   const handleViewDetails = (transaction) => { setViewTransaction(transaction); setModalView('VIEW_TRANSACTION'); setIsModalOpen(true); }
-  const greetingName = user?.username || 'Visitante';
+  
+  // --- LÓGICA DE EXIBIÇÃO DO NOME ---
+  // Prioriza o 'currentUser' (vindo do /me/) sobre o 'user' (vindo do login)
+  const greetingName = currentUser?.first_name || currentUser?.username || user?.first_name || user?.username || 'Visitante';
 
   return (
     <div className="flex w-screen h-screen overflow-hidden font-sans transition-colors duration-300 bg-gray-50 text-gray-900 dark:bg-[#0F172A] dark:text-gray-100">
@@ -208,7 +220,14 @@ export default function Dashboard() {
       <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden relative">
         <div className="flex-1 overflow-y-auto w-full scroll-smooth">
             <header className="w-full px-4 py-6 md:px-8 md:py-8 flex justify-between items-center shrink-0">
-                <div className="flex items-center gap-4"><img src={logoImg} alt="Domo" className="h-10 w-auto object-contain md:hidden" /><div><h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-white truncate">Olá, {greetingName}!</h1><p className="text-gray-500 dark:text-gray-400 text-sm md:text-base">Visão geral das suas finanças</p></div></div>
+                <div className="flex items-center gap-4">
+                    <img src={logoImg} alt="Domo" className="h-10 w-auto object-contain md:hidden" />
+                    <div>
+                        {/* SAUDAÇÃO USANDO DADO FRESCO DO BANCO */}
+                        <h1 className="text-2xl md:text-3xl font-bold text-gray-800 dark:text-white truncate">Olá, {greetingName}!</h1>
+                        <p className="text-gray-500 dark:text-gray-400 text-sm md:text-base">Visão geral das suas finanças</p>
+                    </div>
+                </div>
                 <div className="flex items-center gap-3 shrink-0"><button onClick={toggleTheme} className="p-2.5 rounded-full bg-white dark:bg-slate-800 shadow-sm border border-gray-200 dark:border-slate-700 text-yellow-500 dark:text-yellow-400">{theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}</button></div>
             </header>
             <main className="w-full px-4 md:px-8 pb-32 md:pb-10 space-y-8">
@@ -283,13 +302,12 @@ export default function Dashboard() {
                         </div>
                     </div>
 
-                    {/* CARTÕES (COM LÓGICA DE STATUS "FECHADA" CORRIGIDA) */}
+                    {/* CARTÕES */}
                     <div>
                         <div className="flex justify-between items-center mb-4 px-1"><h2 className="font-bold text-gray-700 dark:text-gray-300">Meus Cartões</h2><button onClick={() => { setEditingItem(null); setModalView('CARD'); setIsModalOpen(true); }} className="text-purple-600 text-xs font-bold hover:underline">+ Adicionar</button></div>
                         <div className="space-y-3">{cards.map(card => {
                             const invoiceVal = card.invoice_info?.value || 0; 
                             
-                            // Lógica para detectar status FECHADA visualmente se hoje >= dia_fechamento
                             const todayDay = new Date().getDate();
                             const isVisuallyClosed = todayDay >= card.closing_day;
                             const apiStatus = card.invoice_info?.status || 'OPEN';
@@ -321,10 +339,8 @@ export default function Dashboard() {
                                                             <p className={`text-[10px] font-bold ${statusColor}`}>
                                                                 {invoiceStatus}: R$ {Number(invoiceVal).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                                             </p>
-                                                            {/* DATA DE VENCIMENTO VISUAL */}
                                                             <p className="text-[9px] text-gray-400 font-medium">Vence dia {card.due_day}</p>
                                                         </div>
-                                                        {/* Botão Pagar só aparece se tiver valor */}
                                                         <button 
                                                             onClick={(e) => { e.stopPropagation(); handleOpenPayInvoice(card); }} 
                                                             className="ml-1 px-2 py-0.5 bg-rose-600 text-white text-[10px] font-bold rounded hover:bg-rose-700 transition active:scale-95 shadow-sm"
@@ -371,9 +387,55 @@ export default function Dashboard() {
                             )}
                         </div>
                     </div>
+                    
+                    {/* HISTÓRICO ATUALIZADO */}
                     <div className="lg:col-span-2">
                         <h2 className="font-bold text-lg text-gray-800 dark:text-gray-200 mb-4 px-1">Histórico Recente</h2>
-                        <div className="space-y-2">{recentTransactions.length === 0 ? (<p className="text-center text-gray-500 text-sm py-8 bg-white dark:bg-slate-800 rounded-2xl border border-dashed border-gray-200 dark:border-slate-700">Nenhuma movimentação.</p>) : (recentTransactions.map(t => { const isExpense = t.type === 'EXPENSE'; const hasItems = t.items && t.items.length > 0; return (<div key={t.id} onClick={() => hasItems && handleViewDetails(t)} className={`flex justify-between items-center p-3 bg-white dark:bg-[#1E293B] border border-gray-100 dark:border-slate-700/50 rounded-xl shadow-sm transition-all ${hasItems ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-800 active:scale-[0.99]' : ''}`}><div className="flex items-center gap-3"><div className={`p-2 rounded-full ${isExpense ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'} dark:bg-opacity-10`}>{isExpense ? <ArrowDownLeft size={18} /> : <ArrowUpRight size={18} />}</div><div><p className="font-bold text-sm text-gray-800 dark:text-gray-200 truncate max-w-[150px] md:max-w-xs">{t.description}</p><div className="flex items-center gap-2 mt-0.5"><p className="text-xs text-gray-500">{new Date(t.date + 'T12:00:00').toLocaleDateString('pt-BR')} • {t.category_name || 'Geral'}</p>{hasItems && (<span className="flex items-center gap-1 text-[9px] font-bold bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-100 dark:border-indigo-800/50"><ShoppingBag size={10} /> {t.items.length} itens</span>)}</div></div></div><span className={`font-bold text-sm ${isExpense ? 'text-rose-600' : 'text-emerald-600'}`}>{isExpense ? '- ' : '+ '} R$ {Number(t.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>)}))}</div>
+                        <div className="space-y-2">
+                            {recentTransactions.length === 0 ? (
+                                <p className="text-center text-gray-500 text-sm py-8 bg-white dark:bg-slate-800 rounded-2xl border border-dashed border-gray-200 dark:border-slate-700">Nenhuma movimentação.</p>
+                            ) : (
+                                recentTransactions.map(t => {
+                                    const isExpense = t.type === 'EXPENSE';
+                                    const hasItems = t.items && t.items.length > 0;
+                                    return (
+                                        <div 
+                                            key={t.id} 
+                                            onClick={() => hasItems && handleViewDetails(t)} 
+                                            className={`flex justify-between items-center p-3 bg-white dark:bg-[#1E293B] border border-gray-100 dark:border-slate-700/50 rounded-xl shadow-sm transition-all ${hasItems ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-800 active:scale-[0.99]' : ''}`}
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className={`p-2 rounded-full ${isExpense ? 'bg-rose-50 text-rose-500' : 'bg-emerald-50 text-emerald-500'} dark:bg-opacity-10`}>
+                                                    {isExpense ? <ArrowDownLeft size={18} /> : <ArrowUpRight size={18} />}
+                                                </div>
+                                                <div>
+                                                    <p className="font-bold text-sm text-gray-800 dark:text-gray-200 truncate max-w-[150px] md:max-w-xs">{t.description}</p>
+                                                    
+                                                    {/* LINHA NOVA: QUEM FEZ E QUAL CONTA */}
+                                                    <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                                        <span className="flex items-center gap-1 text-gray-600 dark:text-gray-300 font-medium">
+                                                            <User size={10} /> {t.owner_name}
+                                                        </span>
+                                                        <span className="text-gray-300 dark:text-gray-600">•</span>
+                                                        <span className="text-teal-600 dark:text-teal-400 font-medium truncate max-w-[100px]">
+                                                            {t.source_name}
+                                                        </span>
+                                                    </div>
+                                                    
+                                                    <div className="flex items-center gap-2 mt-0.5">
+                                                        <p className="text-xs text-gray-500">{new Date(t.date + 'T12:00:00').toLocaleDateString('pt-BR')} • {t.category_name || 'Geral'}</p>
+                                                        {hasItems && (<span className="flex items-center gap-1 text-[9px] font-bold bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-100 dark:border-indigo-800/50"><ShoppingBag size={10} /> {t.items.length} itens</span>)}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <span className={`font-bold text-sm ${isExpense ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                                {isExpense ? '- ' : '+ '} R$ {Number(t.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                            </span>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
                     </div>
                 </div>
             </main>
@@ -431,10 +493,10 @@ export default function Dashboard() {
             </div>
         )}
 
-        {/* MODAL: PAGAR CONTA RECORRENTE (CORRIGIDO) */}
+        {/* MODAL: PAGAR CONTA RECORRENTE */}
         {modalView === 'PAY_BILL' && billToPay && (<form onSubmit={confirmPayment} className="space-y-4"><div className="bg-gray-50 dark:bg-slate-900 p-4 rounded-xl border border-gray-100 dark:border-slate-700"><p className="text-sm text-gray-500 dark:text-gray-400">Pagando:</p><p className="font-bold text-lg text-gray-800 dark:text-white">{billToPay.name}</p></div><div><label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Valor</label><MoneyInput value={paymentValue} onValueChange={setPaymentValue} /></div><div><label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Conta para débito</label><div className="relative"><select className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 text-gray-800 dark:text-white outline-none focus:ring-2 focus:ring-teal-500 appearance-none" value={paymentAccount} onChange={e => setPaymentAccount(e.target.value)} required>{accounts.map(acc => (<option key={acc.id} value={acc.id}>{acc.name} (R$ {Number(acc.balance).toLocaleString('pt-BR', { minimumFractionDigits: 2 })})</option>))}</select><div className="absolute right-3 top-3.5 pointer-events-none text-gray-400"><ArrowDownCircle size={16} /></div></div></div><button type="submit" className="w-full bg-teal-600 text-white font-bold py-3 rounded-xl hover:bg-teal-500 active:scale-95 transition shadow-lg shadow-teal-500/20">Confirmar Pagamento</button></form>)}
         
-        {/* MODAL: PAGAR FATURA (CORRIGIDO) */}
+        {/* MODAL: PAGAR FATURA */}
         {modalView === 'PAY_INVOICE' && invoiceToPay && (<form onSubmit={confirmInvoicePayment} className="space-y-4"><div className="bg-rose-50 dark:bg-rose-900/10 p-4 rounded-xl border border-rose-100 dark:border-rose-900/30"><p className="text-sm text-rose-500 mb-1 font-bold">Fatura do Cartão:</p><p className="font-bold text-lg text-gray-800 dark:text-white">{invoiceToPay.name}</p></div><div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Valor a Pagar</label><MoneyInput value={paymentValue} onValueChange={setPaymentValue} /></div><div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Pagar usando:</label><div className="grid grid-cols-2 gap-3 mb-3"><button type="button" onClick={() => setPayMethod('ACCOUNT')} className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all ${payMethod === 'ACCOUNT' ? 'bg-teal-50 border-teal-500 text-teal-700 dark:bg-teal-900/20 dark:text-teal-400' : 'bg-white border-gray-200 text-gray-500 dark:bg-slate-800 dark:border-slate-700'}`}><div className="flex items-center gap-2 mb-1"><Wallet size={18} /><span className="font-bold text-sm">Saldo</span></div>{payMethod === 'ACCOUNT' && <CheckCircle2 size={16} className="text-teal-500" />}</button><button type="button" onClick={() => setPayMethod('CARD')} className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all ${payMethod === 'CARD' ? 'bg-purple-50 border-purple-500 text-purple-700 dark:bg-purple-900/20 dark:text-purple-400' : 'bg-white border-gray-200 text-gray-500 dark:bg-slate-800 dark:border-slate-700'}`}><div className="flex items-center gap-2 mb-1"><CreditCard size={18} /><span className="font-bold text-sm">Outro Cartão</span></div>{payMethod === 'CARD' && <CheckCircle2 size={16} className="text-purple-500" />}</button></div>{payMethod === 'ACCOUNT' ? (<div className="relative"><select className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 text-gray-800 dark:text-white outline-none focus:ring-2 focus:ring-teal-500 appearance-none" value={paymentAccount} onChange={e => setPaymentAccount(e.target.value)} required>{accounts.map(acc => (<option key={acc.id} value={acc.id}>{acc.name} (R$ {Number(acc.balance).toLocaleString('pt-BR', { minimumFractionDigits: 2 })})</option>))}</select><div className="absolute right-3 top-3.5 pointer-events-none text-gray-400"><ArrowDownCircle size={16} /></div></div>) : (<div className="relative"><select className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 text-gray-800 dark:text-white outline-none focus:ring-2 focus:ring-purple-500 appearance-none" value={paymentCard} onChange={e => setPaymentCard(e.target.value)} required>{cards.filter(c => c.id !== invoiceToPay.cardId).map(c => (<option key={c.id} value={c.id}>{c.name} (Disp: R$ {Number(c.limit_available).toLocaleString('pt-BR', { minimumFractionDigits: 2 })})</option>))}{cards.filter(c => c.id !== invoiceToPay.cardId).length === 0 && (<option disabled>Sem outros cartões disponíveis</option>)}</select><div className="absolute right-3 top-3.5 pointer-events-none text-gray-400"><ArrowDownCircle size={16} /></div></div>)}</div><button type="submit" className="w-full bg-rose-600 text-white font-bold py-3 rounded-xl hover:bg-rose-500 active:scale-95 transition shadow-lg shadow-rose-500/20">Confirmar Pagamento</button></form>)}
       </Modal>
 

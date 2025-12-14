@@ -59,18 +59,14 @@ export function AuthProvider({ children }) {
     }
   }
 
-  async function signUp({ username, email, password }) {
+  async function signUp({ username, email, password, first_name }) { // <--- Adicione first_name aqui
     try {
-        // Registro normal (Signal cria casa padrão)
-        const response = await api.post('/register/', { username, email, password });
-        const { token } = response.data;
-        
-        handleLoginSuccess(token, username);
-        
-        // Checa convite APÓS registro (Endpoint faz a troca de casas)
-        await checkPendingInvite();
-
-        toast.success("Conta criada com sucesso!");
+      const response = await api.post('/register/', {
+        username,
+        email,
+        password,
+        first_name // <--- E certifique-se de enviá-lo aqui
+      });
         
     } catch (error) {
         console.error(error);
