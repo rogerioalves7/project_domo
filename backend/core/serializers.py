@@ -157,3 +157,19 @@ class HouseInvitationSerializer(serializers.ModelSerializer):
     class Meta:
         model = HouseInvitation
         fields = '__all__'
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    new_password = serializers.CharField(write_only=True, min_length=6)
+    uid = serializers.CharField()
+    token = serializers.CharField()
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True, min_length=6)
+
+class ChangeEmailSerializer(serializers.Serializer):
+    password = serializers.CharField(required=True)
+    new_email = serializers.EmailField(required=True)

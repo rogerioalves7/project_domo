@@ -1,22 +1,29 @@
+import sys
+from django.shortcuts import get_object_or_404
+from django.db import models, transaction as db_transaction, IntegrityError
+from django.db.models import Q, F, Sum
+from django.db.models.functions import TruncMonth
+from django.conf import settings
+from django.core.mail import send_mail
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes, force_str
+from django.contrib.auth import get_user_model
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.contrib.auth.password_validation import validate_password
+from decimal import Decimal, InvalidOperation
+import datetime
+from dateutil.relativedelta import relativedelta
+
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from django.db.models import Q, F
-from django.db import models, transaction as db_transaction
-from dateutil.relativedelta import relativedelta
-import datetime
-from decimal import Decimal
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.contrib.auth.models import User
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.authtoken.models import Token
-from django.core.mail import send_mail
-from django.conf import settings
-from django.shortcuts import get_object_or_404
-from django.core.exceptions import ObjectDoesNotExist # Importante para exceções
 
-# Importação completa dos Models e Serializers
+# Importação dos Models e Serializers locais
 from .models import (
     House, HouseMember, Account, CreditCard, Invoice, 
     Transaction, Product, InventoryItem, ShoppingList, 
@@ -27,8 +34,24 @@ from .serializers import (
     CreditCardSerializer, InvoiceSerializer, TransactionSerializer, 
     ProductSerializer, InventoryItemSerializer, ShoppingListSerializer, 
     RecurringBillSerializer, CategorySerializer, TransactionItemSerializer, 
-    HouseInvitationSerializer
+    HouseInvitationSerializer, PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
+    ChangePasswordSerializer, ChangeEmailSerializer
 )
+
+User = get_user_model()
+
+# --- SOLUÇÃO CRÍTICA: GERADOR DE TOKEN QUE IGNORA LAST_LOGIN ---
+class CustomTokenGenerator(PasswordResetTokenGenerator):
+    """
+    Remove a dependência do 'last_login' para gerar o hash.
+    Isso corrige o erro onde o token fica inválido se o usuário for salvo
+    ou logado entre o pedido e a confirmação.
+    """
+    def _make_hash_value(self, user, timestamp):
+        # Apenas ID, Senha e Timestamp. Removemos last_login.
+        return str(user.pk) + user.password + str(timestamp)
+
+custom_token_generator = CustomTokenGenerator()
 
 # ======================================================================
 # VIEWSETS BASE
@@ -53,7 +76,7 @@ class BaseHouseViewSet(viewsets.ModelViewSet):
                 serializer.save(house=house)
 
 # ======================================================================
-# CONFIGURAÇÃO E REGISTRO
+# CASA E MEMBROS
 # ======================================================================
 
 class HouseViewSet(viewsets.ModelViewSet):
@@ -71,10 +94,6 @@ class HouseViewSet(viewsets.ModelViewSet):
         house = serializer.save()
         
         # 2. Garante que o criador seja MASTER
-        # O método update_or_create cobre dois cenários:
-        # A) O serializer/signal já criou o membro como 'MEMBER'? -> Ele atualiza para 'MASTER'.
-        # B) Ninguém criou o membro ainda? -> Ele cria agora como 'MASTER'.
-        
         HouseMember.objects.update_or_create(
             user=self.request.user,
             house=house,
@@ -86,7 +105,6 @@ class HouseViewSet(viewsets.ModelViewSet):
         house = self.get_object()
         user = request.user
         
-        # 1. Verificação de Segurança
         try:
             member = HouseMember.objects.get(user=user, house=house)
             if member.role != 'MASTER':
@@ -94,17 +112,11 @@ class HouseViewSet(viewsets.ModelViewSet):
         except HouseMember.DoesNotExist:
             return Response({'error': 'Membro não encontrado.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # 2. Apagar a Casa
-        # O Django vai apagar em cascata: Membros, Transações vinculadas à casa, Contas, etc.
-        house.delete()
-
-        # 3. Apagar o Usuário (O Master)
-        # Como solicitado, apagamos também o registro de login do usuário.
-        user.delete()
+        house.delete() # Cascade deleta tudo da casa
+        user.delete()  # Deleta o usuário Master
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-    # --- LÓGICA DE SAÍDA (MANTIDA IGUAL) ---
     @action(detail=True, methods=['post'])
     def leave(self, request, pk=None):
         house = self.get_object()
@@ -132,25 +144,20 @@ class HouseViewSet(viewsets.ModelViewSet):
 
         return Response({'status': 'Você saiu da casa com sucesso.'})
 
-# --- 2. HOUSE MEMBER VIEW SET (Atualizada para usar MASTER) ---
+
 class HouseMemberViewSet(BaseHouseViewSet):
     queryset = HouseMember.objects.all()
     serializer_class = HouseMemberSerializer
 
     def destroy(self, request, *args, **kwargs):
-        # 1. Quem está tentando deletar?
         requester = request.user
         
-        # 2. Verifica se o solicitante tem vínculo com a casa
         if not hasattr(requester, 'house_member'):
             return Response({'error': 'Você não é membro desta casa.'}, status=status.HTTP_403_FORBIDDEN)
             
-        # 3. VERIFICAÇÃO DE SEGURANÇA: O solicitante é MASTER?
-        # (Alterado de 'ADMIN' para 'MASTER' conforme nossa regra)
         if requester.house_member.role != 'MASTER':
             return Response({'error': 'Apenas o Master pode remover membros.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # 4. Impede que o usuário delete a si mesmo
         instance = self.get_object()
         if instance.user == requester:
              return Response({'error': 'Você não pode se remover/banir. Use a opção "Sair da Casa".'}, status=status.HTTP_400_BAD_REQUEST)
@@ -169,18 +176,13 @@ class HistoryViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def list(self, request):
-        from django.db.models.functions import TruncMonth
-        from django.db.models import Sum
-
         user = self.request.user
         if not hasattr(user, 'house_member'):
             return Response([])
         
         house = user.house_member.house
         today = datetime.date.today()
-        
-        start_date = today - relativedelta(months=11)
-        start_date = start_date.replace(day=1)
+        start_date = (today - relativedelta(months=11)).replace(day=1)
 
         transactions = Transaction.objects.filter(
             house=house, 
@@ -201,11 +203,9 @@ class HistoryViewSet(viewsets.ViewSet):
             if month_str not in history:
                 history[month_str] = {
                     'month_label': t['month'],
-                    'income': 0,
-                    'expense': 0,
+                    'income': 0, 'expense': 0,
                     'estimated_expense': estimated_fixed,
-                    'categories': {},
-                    'transactions': []
+                    'categories': {}, 'transactions': []
                 }
             
             val = float(t['value'])
@@ -245,7 +245,7 @@ class HistoryViewSet(viewsets.ViewSet):
         return Response(result)
 
 # ======================================================================
-# FINANCEIRO
+# FINANCEIRO (Contas, Cartões, Faturas, Recorrências)
 # ======================================================================
 
 class AccountViewSet(BaseHouseViewSet):
@@ -293,11 +293,8 @@ class InvoiceViewSet(BaseHouseViewSet):
             Transaction.objects.create(
                 house=invoice.card.house,
                 description=f"Pagamento Fatura {invoice.card.name}",
-                value=payment_value,
-                type='EXPENSE',
-                account=account,
-                date=date_payment,
-                category=None 
+                value=payment_value, type='EXPENSE',
+                account=account, date=date_payment, category=None 
             )
 
             invoice.amount_paid += payment_value
@@ -324,23 +321,21 @@ class RecurringBillViewSet(BaseHouseViewSet):
     def create(self, request, *args, **kwargs):
         house = request.user.house_member.house
         name = request.data.get('name')
-        
-        # Validação de Duplicidade
         if RecurringBill.objects.filter(house=house, name__iexact=name).exists():
             return Response({'error': 'Já existe uma conta fixa com este nome.'}, status=status.HTTP_400_BAD_REQUEST)
-
         return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
         house = request.user.house_member.house
         name = request.data.get('name')
         instance = self.get_object()
-        
-        # Validação de Duplicidade (ignorando o próprio item)
         if RecurringBill.objects.filter(house=house, name__iexact=name).exclude(id=instance.id).exists():
             return Response({'error': 'Já existe uma conta fixa com este nome.'}, status=status.HTTP_400_BAD_REQUEST)
-
         return super().update(request, *args, **kwargs)
+
+# ======================================================================
+# TRANSAÇÕES (O Coração Financeiro)
+# ======================================================================
 
 class TransactionViewSet(viewsets.ModelViewSet):
     queryset = Transaction.objects.all()
@@ -351,17 +346,11 @@ class TransactionViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if hasattr(user, 'house_member') and user.house_member.house:
             house = user.house_member.house
-            
             return Transaction.objects.filter(house=house).filter(
-                # 1. Regra para CONTA (se tiver conta vinculada)
                 (Q(account__isnull=True) | Q(account__is_shared=True) | Q(account__owner=user))
             ).filter(
-                # 2. Regra para CARTÃO (via Fatura/Invoice)
-                # Aceita se não tiver fatura (é débito/dinheiro)
-                # OU se tiver fatura, o cartão dela for compartilhado ou meu
                 (Q(invoice__isnull=True) | Q(invoice__card__is_shared=True) | Q(invoice__card__owner=user))
             ).order_by('-date', '-id')
-            
         return Transaction.objects.none()
 
     def create(self, request, *args, **kwargs):
@@ -369,21 +358,16 @@ class TransactionViewSet(viewsets.ModelViewSet):
         user = request.user
         house = user.house_member.house
         
-        # 1. Dados Básicos
         payment_method = data.get('payment_method')
         transaction_type = data.get('type')
-        
         account_id = data.get('account') or data.get('account_id')
         card_id = data.get('card') or data.get('card_id')
+        items_data = data.get('items', []) 
 
-        # Fallback de IDs
         if payment_method == 'CREDIT_CARD' and not card_id and account_id:
             card_id = account_id
             account_id = None
 
-        items_data = data.get('items', []) 
-
-        # Tratamento de Valor
         raw_value = data.get('value')
         try:
             if isinstance(raw_value, str):
@@ -392,7 +376,6 @@ class TransactionViewSet(viewsets.ModelViewSet):
         except (InvalidOperation, TypeError):
             return Response({'error': 'Valor inválido.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 2. Validações e Preparação
         try:
             with db_transaction.atomic():
                 account = None
@@ -401,14 +384,10 @@ class TransactionViewSet(viewsets.ModelViewSet):
                 
                 # --- Lógica: DESPESA (CONTA CORRENTE) ---
                 if transaction_type == 'EXPENSE' and payment_method == 'ACCOUNT':
-                    if not account_id:
-                         return Response({'error': 'Selecione uma conta.'}, status=status.HTTP_400_BAD_REQUEST)
+                    if not account_id: return Response({'error': 'Selecione uma conta.'}, status=status.HTTP_400_BAD_REQUEST)
                     account = Account.objects.get(id=account_id, house=house)
                     
-                    # NOVA LÓGICA: Saldo + Limite
-                    purchasing_power = account.balance + account.limit
-                    
-                    if total_value > purchasing_power:
+                    if total_value > (account.balance + account.limit):
                         return Response({'error': f'Saldo insuficiente (incluindo limite) na conta: {account.name}'}, status=status.HTTP_400_BAD_REQUEST)
                     
                     account.balance -= total_value
@@ -416,9 +395,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
 
                 # --- Lógica: DESPESA (CARTÃO DE CRÉDITO) ---
                 elif transaction_type == 'EXPENSE' and payment_method == 'CREDIT_CARD':
-                    if not card_id:
-                        return Response({'error': 'Selecione um cartão.'}, status=status.HTTP_400_BAD_REQUEST)
-                    
+                    if not card_id: return Response({'error': 'Selecione um cartão.'}, status=status.HTTP_400_BAD_REQUEST)
                     card = CreditCard.objects.get(id=card_id, house=house)
                     
                     if total_value > card.limit_available:
@@ -427,18 +404,11 @@ class TransactionViewSet(viewsets.ModelViewSet):
                     card.limit_available -= total_value
                     card.save()
 
-                    # Lógica de Fatura
                     today = datetime.date.today()
                     tx_date_str = data.get('date')
-                    if tx_date_str:
-                        tx_date = datetime.datetime.strptime(tx_date_str, "%Y-%m-%d").date()
-                    else:
-                        tx_date = today
+                    tx_date = datetime.datetime.strptime(tx_date_str, "%Y-%m-%d").date() if tx_date_str else today
 
-                    if tx_date.day >= card.closing_day:
-                        ref_date = (tx_date + relativedelta(months=1)).replace(day=1)
-                    else:
-                        ref_date = tx_date.replace(day=1)
+                    ref_date = (tx_date + relativedelta(months=1)).replace(day=1) if tx_date.day >= card.closing_day else tx_date.replace(day=1)
 
                     invoice, _ = Invoice.objects.get_or_create(
                         card=card, reference_date=ref_date,
@@ -447,19 +417,15 @@ class TransactionViewSet(viewsets.ModelViewSet):
                     
                     installments = int(data.get('installments', 1))
                     first_installment_value = total_value / installments
-                    
                     invoice.value += first_installment_value
                     invoice.save()
 
-                # --- Lógica: RECEITA (INCOME) - ADICIONADO AGORA ---
+                # --- Lógica: RECEITA (INCOME) ---
                 elif transaction_type == 'INCOME':
-                    if not account_id:
-                        return Response({'error': 'Selecione uma conta para receber.'}, status=status.HTTP_400_BAD_REQUEST)
-                    
+                    if not account_id: return Response({'error': 'Selecione uma conta para receber.'}, status=status.HTTP_400_BAD_REQUEST)
                     account = Account.objects.get(id=account_id, house=house)
-                    account.balance += total_value # SOMA ao saldo
+                    account.balance += total_value 
                     account.save()
-
 
                 # 3. Salva a Transação Principal
                 installments = int(data.get('installments', 1))
@@ -494,22 +460,17 @@ class TransactionViewSet(viewsets.ModelViewSet):
                         ))
                     TransactionItem.objects.bulk_create(items_objects)
                 
-                # 5. Gera Parcelas Futuras (Apenas Despesas no Cartão)
+                # 5. Gera Parcelas Futuras (Cartão)
                 if installments > 1 and card and transaction_type == 'EXPENSE':
                     installment_val = total_value / installments
                     new_transactions = []
-                    
                     base_date = transaction_instance.date
                     if isinstance(base_date, str):
                         base_date = datetime.datetime.strptime(base_date, "%Y-%m-%d").date()
                     
                     for i in range(1, installments):
                         future_date = base_date + relativedelta(months=i)
-                        
-                        if future_date.day >= card.closing_day:
-                             fut_ref = (future_date + relativedelta(months=1)).replace(day=1)
-                        else:
-                             fut_ref = future_date.replace(day=1)
+                        fut_ref = (future_date + relativedelta(months=1)).replace(day=1) if future_date.day >= card.closing_day else future_date.replace(day=1)
 
                         fut_invoice, _ = Invoice.objects.get_or_create(
                             card=card, reference_date=fut_ref,
@@ -521,10 +482,8 @@ class TransactionViewSet(viewsets.ModelViewSet):
                         new_transactions.append(Transaction(
                             house=house,
                             description=f"{data.get('description')} ({i+1}/{installments})",
-                            value=installment_val,
-                            type='EXPENSE',
-                            invoice=fut_invoice, 
-                            date=future_date,
+                            value=installment_val, type='EXPENSE',
+                            invoice=fut_invoice, date=future_date,
                             category_id=data.get('category')
                         ))
                     
@@ -540,9 +499,9 @@ class TransactionViewSet(viewsets.ModelViewSet):
              return Response({'error': 'Cartão não encontrado.'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': f"Erro interno: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
- 
+
 # ======================================================================
-# ESTOQUE E PRODUTOS
+# ESTOQUE E COMPRAS
 # ======================================================================
 
 class ProductViewSet(BaseHouseViewSet):
@@ -561,30 +520,21 @@ class InventoryViewSet(BaseHouseViewSet):
         if not min_qty: min_qty = product.min_quantity
         serializer.save(house=user.house_member.house, min_quantity=min_qty)
 
-# ======================================================================
-# SHOPPING LIST
-# ======================================================================
-
 class ShoppingListViewSet(BaseHouseViewSet):
     queryset = ShoppingList.objects.all()
     serializer_class = ShoppingListSerializer
 
     def get_queryset(self):
         user = self.request.user
-        if not hasattr(user, 'house_member'):
-            return ShoppingList.objects.none()
+        if not hasattr(user, 'house_member'): return ShoppingList.objects.none()
         
         house = user.house_member.house
         
-        low_stock_items = InventoryItem.objects.filter(
-            house=house,
-            quantity__lte=models.F('min_quantity')
-        )
-
+        # Gera lista automática baseada em estoque baixo
+        low_stock_items = InventoryItem.objects.filter(house=house, quantity__lte=models.F('min_quantity'))
         for item in low_stock_items:
             ShoppingList.objects.get_or_create(
-                house=house,
-                product=item.product,
+                house=house, product=item.product,
                 defaults={
                     'quantity_to_buy': item.min_quantity, 
                     'real_unit_price': item.product.estimated_price,
@@ -592,16 +542,9 @@ class ShoppingListViewSet(BaseHouseViewSet):
                 }
             )
 
-        healthy_stock_product_ids = InventoryItem.objects.filter(
-            house=house,
-            quantity__gt=models.F('min_quantity')
-        ).values_list('product_id', flat=True)
-
-        ShoppingList.objects.filter(
-            house=house,
-            product_id__in=healthy_stock_product_ids,
-            is_purchased=False
-        ).delete()
+        # Remove itens que já estão com estoque saudável
+        healthy_stock_product_ids = InventoryItem.objects.filter(house=house, quantity__gt=models.F('min_quantity')).values_list('product_id', flat=True)
+        ShoppingList.objects.filter(house=house, product_id__in=healthy_stock_product_ids, is_purchased=False).delete()
 
         return ShoppingList.objects.filter(house=house).order_by('is_purchased', 'product__name')
 
@@ -611,17 +554,14 @@ class ShoppingListViewSet(BaseHouseViewSet):
         house = user.house_member.house
         data = request.data
         
-        # 1. Dados da Requisição
         payment_method = data.get('payment_method') 
         source_id = data.get('source_id')
-        total_paid_str = str(data.get('total_value', 0)).replace(',', '.')
-        total_paid = Decimal(total_paid_str)
+        total_paid = Decimal(str(data.get('total_value', 0)).replace(',', '.'))
         purchase_date = data.get('date', datetime.date.today())
 
         if not payment_method or not source_id:
             return Response({'error': 'Selecione uma forma de pagamento.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 2. Busca itens do carrinho
         purchased_items = ShoppingList.objects.filter(house=house, is_purchased=True)
         if not purchased_items.exists():
             return Response({'error': 'Carrinho vazio. Marque os itens comprados.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -629,17 +569,10 @@ class ShoppingListViewSet(BaseHouseViewSet):
         try:
             with db_transaction.atomic():
                 account = None
-                # card = None  <-- Não precisamos guardar a variável card para salvar na transaction, só para lógica
                 invoice = None
                 description = "Compra de Mercado"
+                category, _ = Category.objects.get_or_create(house=house, name="Compras", defaults={'type': 'EXPENSE'})
 
-                category, _ = Category.objects.get_or_create(
-                    house=house,
-                    name="Compras",
-                    defaults={'type': 'EXPENSE'}
-                )
-
-                # 3. Lógica de Pagamento
                 if payment_method == 'ACCOUNT':
                     account = Account.objects.get(id=source_id, house=house)
                     if total_paid > account.balance:
@@ -651,56 +584,34 @@ class ShoppingListViewSet(BaseHouseViewSet):
                     if total_paid > card.limit_available:
                         return Response({'error': 'Limite insuficiente no cartão.'}, status=status.HTTP_400_BAD_REQUEST)
                     
-                    # Lógica de Fatura
                     today = datetime.date.today()
-                    if today.day >= card.closing_day:
-                        today = today + relativedelta(months=1)
+                    if today.day >= card.closing_day: today = today + relativedelta(months=1)
                     ref_date = today.replace(day=1)
                     
-                    invoice, _ = Invoice.objects.get_or_create(
-                        card=card, reference_date=ref_date,
-                        defaults={'value': 0, 'status': 'OPEN'}
-                    )
+                    invoice, _ = Invoice.objects.get_or_create(card=card, reference_date=ref_date, defaults={'value': 0, 'status': 'OPEN'})
                     invoice.value += total_paid
                     invoice.save()
-                    
                     card.limit_available -= total_paid
                     card.save()
                     description = f"Mercado ({card.name})"
 
-                # 4. Cria a Transação Principal (CORRIGIDO AQUI)
                 transaction = Transaction.objects.create(
-                    house=house,
-                    # owner=user,     <-- Removido na etapa anterior
-                    description=description,
-                    value=total_paid,
-                    type='EXPENSE',
-                    # payment_method=payment_method, <-- REMOVIDO (Campo não existe no model)
-                    account=account,
-                    # card=card,                     <-- REMOVIDO (O vínculo é via 'invoice')
-                    invoice=invoice,
-                    category=category, 
-                    date=purchase_date
+                    house=house, description=description, value=total_paid,
+                    type='EXPENSE', account=account, invoice=invoice,
+                    category=category, date=purchase_date
                 )
 
-                # 5. Processa os Itens
                 transaction_items = []
                 count = 0
-
                 for shop_item in purchased_items:
                     qty = shop_item.quantity_to_buy
-                    
                     unit_price = shop_item.real_unit_price
                     if unit_price <= 0:
                          unit_price = shop_item.discount_unit_price if shop_item.discount_unit_price > 0 else shop_item.product.estimated_price
 
-                    item_total_value = unit_price * qty
-
                     transaction_items.append(TransactionItem(
-                        transaction=transaction,
-                        description=shop_item.product.name, 
-                        quantity=qty,
-                        value=item_total_value 
+                        transaction=transaction, description=shop_item.product.name, 
+                        quantity=qty, value=unit_price * qty 
                     ))
 
                     inv_item, _ = InventoryItem.objects.get_or_create(
@@ -721,13 +632,11 @@ class ShoppingListViewSet(BaseHouseViewSet):
 
                 return Response({'message': f'Compra finalizada! {count} itens processados.'}, status=status.HTTP_200_OK)
 
-        except Account.DoesNotExist:
-            return Response({'error': 'Conta selecionada não encontrada.'}, status=status.HTTP_404_NOT_FOUND)
-        except CreditCard.DoesNotExist:
-            return Response({'error': 'Cartão selecionado não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+        except (Account.DoesNotExist, CreditCard.DoesNotExist):
+            return Response({'error': 'Meio de pagamento não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({'error': f"Erro interno: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
-        
+
 # ======================================================================
 # GESTÃO DE USUÁRIO E CONVITES
 # ======================================================================
@@ -735,285 +644,6 @@ class ShoppingListViewSet(BaseHouseViewSet):
 class InvitationViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
-    # LISTAR CONVITES PENDENTES (GET /invitations/)
-    def list(self, request):
-        user = request.user
-        if not hasattr(user, 'house_member'):
-            return Response([])
-        
-        house = user.house_member.house
-        invites = HouseInvitation.objects.filter(house=house, accepted=False).order_by('-created_at')
-        serializer = HouseInvitationSerializer(invites, many=True)
-        return Response(serializer.data)
-
-    # ENVIAR CONVITE (POST /invitations/)
-    def create(self, request):
-        from django.core.mail import send_mail
-        from django.conf import settings
-
-        email = request.data.get('email')
-        user = request.user
-        
-        if not hasattr(user, 'house_member'):
-            return Response({'error': 'Você não pertence a uma casa.'}, status=400)
-            
-        house = user.house_member.house
-        
-        if HouseInvitation.objects.filter(house=house, email=email, accepted=False).exists():
-            return Response({'error': 'Já existe um convite pendente para este e-mail.'}, status=400)
-
-        if HouseMember.objects.filter(house=house, user__email=email).exists():
-             return Response({'error': 'Este usuário já faz parte da casa.'}, status=400)
-
-        invitation = HouseInvitation.objects.create(house=house, inviter=user, email=email)
-
-        invite_link = f"http://localhost:5173/accept-invite/{invitation.id}"
-        
-        try:
-            send_mail(
-                f"Convite: Junte-se à casa {house.name}",
-                f"Olá! {user.username} convidou você.\nLink: {invite_link}",
-                settings.EMAIL_HOST_USER,
-                [email],
-                fail_silently=False,
-            )
-            return Response({'message': 'Convite enviado por e-mail!'})
-        except:
-            print(f"Link do convite: {invite_link}")
-            return Response({'message': 'Convite criado (Link no terminal).'})
-
-    # EXCLUIR CONVITE (DELETE /invitations/{pk}/)
-    def destroy(self, request, pk=None):
-        user = request.user
-        house = user.house_member.house
-        
-        try:
-            invite = HouseInvitation.objects.get(id=pk, house=house)
-            invite.delete()
-            return Response({'message': 'Convite cancelado.'}, status=status.HTTP_200_OK)
-        except HouseInvitation.DoesNotExist:
-            return Response({'error': 'Convite não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
-
-    # ACEITAR CONVITE (POST /invitations/accept/)
-    @action(detail=False, methods=['post'])
-    def accept(self, request):
-        token = request.data.get('token')
-        user = request.user
-
-        if not token:
-            return Response({'error': 'Token de convite não fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # OBTENÇÃO E VALIDAÇÃO ROBUSTA
-        try:
-            invitation = HouseInvitation.objects.get(id=token, accepted=False)
-            
-            # Validação 1: O usuário logado é o convidado?
-            if invitation.email != user.email:
-                # O usuário está logado, mas com o email errado.
-                return Response({'error': 'Este convite não é para o seu e-mail. Por favor, faça login com a conta correta.'}, status=status.HTTP_403_FORBIDDEN)
-            
-            # Validação 2: O usuário já está nessa casa?
-            if HouseMember.objects.filter(user=user, house=invitation.house).exists():
-                invitation.delete() # Limpa o convite usado
-                return Response({'error': 'Você já é membro desta casa.'}, status=status.HTTP_400_BAD_REQUEST)
-
-            # Ação: Criar o vínculo HouseMember
-            HouseMember.objects.create(user=user, house=invitation.house, role='MEMBER')
-            invitation.accepted = True
-            invitation.save()
-            # Alternativa: invitation.delete()
-
-            return Response({'message': f'Bem-vindo à casa {invitation.house.name}!'})
-        
-        except HouseInvitation.DoesNotExist:
-            return Response({'error': 'Convite inválido, expirado ou já utilizado.'}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            # Captura erros gerais (como problemas no HouseMember.create, etc.)
-            print(f"ERRO CRÍTICO AO ACEITAR CONVITE: {str(e)}")
-            return Response({'error': 'Erro interno ao processar o convite.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError, ObjectDoesNotExist
-from django.db import IntegrityError
-# ... (mantenha os outros imports como APIView, AllowAny, Response, etc.)
-
-class RegisterView(APIView):
-    permission_classes = [AllowAny] 
-
-    def post(self, request):
-        username = request.data.get('username')
-        email = request.data.get('email')
-        password = request.data.get('password')
-        invitation_token = request.data.get('invitation_token') 
-
-        # 1. VALIDAÇÃO BÁSICA DE CAMPOS
-        if not username or not password or not email:
-            return Response({'error': 'Por favor, preencha todos os campos (Usuário, E-mail e Senha).'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 2. VALIDAÇÃO DE UNICIDADE (Amigável)
-        if User.objects.filter(username=username).exists():
-            return Response({'error': f'O usuário "{username}" já está em uso. Escolha outro.'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        if User.objects.filter(email=email).exists():
-            return Response({'error': f'O e-mail "{email}" já possui cadastro. Tente fazer login.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 3. VALIDAÇÃO DE FORÇA DA SENHA (Django Native)
-        try:
-            validate_password(password)
-        except ValidationError as e:
-            # Retorna a mensagem exata do Django (ex: "A senha deve ter pelo menos 8 caracteres")
-            return Response({'error': ' '.join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 4. VALIDAÇÃO DO CONVITE (Lógica do Porteiro)
-        if invitation_token:
-            try:
-                invite = HouseInvitation.objects.get(id=invitation_token, accepted=False)
-                
-                # Validação de Segurança: E-mail deve bater
-                if invite.email != email:
-                    return Response({
-                        'error': f'Convite inválido para este e-mail. O convite foi enviado para "{invite.email}", mas você está cadastrando "{email}".'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-                    
-            except (ObjectDoesNotExist, ValueError):
-                return Response({'error': 'O link de convite é inválido, expirou ou já foi utilizado.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 5. CRIAÇÃO DA CONTA (Atomicidade)
-        try:
-            # Cria o usuário
-            user = User.objects.create_user(username=username, email=email, password=password)
-            
-            # Garante a criação da Casa Padrão (Se o signal falhou ou não existe)
-            if not HouseMember.objects.filter(user=user).exists():
-                house_name = f"Casa de {username}"
-                house = House.objects.create(name=house_name)
-                HouseMember.objects.create(user=user, house=house, role='ADMIN')
-
-            # Gera Token
-            token, _ = Token.objects.get_or_create(user=user)
-
-            return Response({
-                'token': token.key,
-                'user_id': user.pk,
-                'username': user.username,
-                'email': user.email
-            }, status=status.HTTP_201_CREATED)
-            
-        except IntegrityError:
-            return Response({'error': 'Erro de integridade: Este usuário ou e-mail já foi registrado simultaneamente.'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        except Exception as e:
-            # Erro genérico final (para bugs de código)
-            print(f"ERRO CRÍTICO NO REGISTRO: {str(e)}")
-            return Response({'error': 'Ocorreu um erro interno ao criar sua conta. Por favor, tente novamente.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    permission_classes = [AllowAny] 
-
-    def post(self, request):
-        username = request.data.get('username')
-        email = request.data.get('email')
-        password = request.data.get('password')
-        # Captura o token apenas para validação (opcional no payload)
-        invitation_token = request.data.get('invitation_token') 
-
-        if not username or not password or not email:
-            return Response({'error': 'Preencha todos os campos.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # --- NOVA VALIDAÇÃO PRÉ-CRIAÇÃO (O Porteiro) ---
-        if invitation_token:
-            try:
-                # Busca o convite
-                invite = HouseInvitation.objects.get(id=invitation_token, accepted=False)
-                
-                # VERIFICAÇÃO CRÍTICA: O e-mail bate?
-                if invite.email != email:
-                    return Response({
-                        'error': f'Este convite foi enviado para {invite.email}, não para {email}. Corrija o e-mail ou use outro convite.'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-                    
-            except (HouseInvitation.DoesNotExist, ValueError):
-                # Se o token for lixo ou não existir, avisamos antes de criar a conta
-                return Response({'error': 'O convite fornecido é inválido ou expirou.'}, status=status.HTTP_400_BAD_REQUEST)
-        # ------------------------------------------------
-
-        if User.objects.filter(username=username).exists():
-            return Response({'error': 'Nome de usuário já existe.'}, status=status.HTTP_400_BAD_REQUEST)
-        if User.objects.filter(email=email).exists():
-            return Response({'error': 'E-mail já cadastrado.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            # 1. Cria o usuário (Agora seguro, pois passamos pelas validações)
-            user = User.objects.create_user(username=username, email=email, password=password)
-            
-            # 2. Cria a Casa Padrão (Fallback manual para garantir Admin)
-            if not HouseMember.objects.filter(user=user).exists():
-                house_name = f"Casa de {username}"
-                house = House.objects.create(name=house_name)
-                HouseMember.objects.create(user=user, house=house, role='ADMIN')
-
-            # 3. Retorna Token
-            token, _ = Token.objects.get_or_create(user=user)
-
-            return Response({
-                'token': token.key,
-                'user_id': user.pk,
-                'username': user.username,
-                'email': user.email
-            }, status=status.HTTP_201_CREATED)
-            
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        
-class InvitationViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated]
-
-    # --- NOVO MÉTODO: SWAP DE CASA (TROCA) ---
-    @action(detail=False, methods=['post'], url_path='join')
-    def join_house(self, request):
-        token = request.data.get('token')
-        user = request.user
-
-        if not token:
-            return Response({'error': 'Token não fornecido.'}, status=400)
-
-        try:
-            invite = HouseInvitation.objects.get(id=token, accepted=False)
-            
-            # 1. Limpeza: Encontra e deleta a casa padrão criada pelo signal
-            # (Geralmente é a única casa onde ele é ADMIN e está sozinho)
-            try:
-                default_member = HouseMember.objects.get(user=user, role='ADMIN')
-                default_house = default_member.house
-                
-                # Só deleta se a casa tiver apenas 1 membro (o próprio usuário)
-                if HouseMember.objects.filter(house=default_house).count() == 1:
-                    default_member.delete()
-                    default_house.delete()
-                else:
-                    # Se ele já tem dados ou outros membros, apenas remove o vínculo
-                    default_member.delete()
-
-            except ObjectDoesNotExist:
-                pass # Se não tiver casa padrão, segue o jogo
-
-            # 2. Cria o vínculo correto
-            HouseMember.objects.create(
-                user=user,
-                house=invite.house,
-                role='MEMBER'
-            )
-
-            # 3. Finaliza convite
-            invite.accepted = True
-            invite.delete()
-
-            return Response({'message': f'Bem-vindo à casa {invite.house.name}!'}, status=200)
-
-        except HouseInvitation.DoesNotExist:
-            return Response({'error': 'Convite inválido ou expirado.'}, status=404)
-        except Exception as e:
-            return Response({'error': str(e)}, status=400)
-
-    # ... (Métodos list, create, destroy mantidos iguais) ...
     def list(self, request):
         user = request.user
         if not hasattr(user, 'house_member'): return Response([])
@@ -1025,30 +655,28 @@ class InvitationViewSet(viewsets.ViewSet):
     def create(self, request):
         email = request.data.get('email')
         user = request.user
-        if not hasattr(user, 'house_member'): return Response({'error': 'Sem casa vinculada.'}, status=400)
+        
+        if not hasattr(user, 'house_member'): return Response({'error': 'Você não pertence a uma casa.'}, status=400)
         house = user.house_member.house
         
-        # Validar duplicidade
         if HouseInvitation.objects.filter(house=house, email=email, accepted=False).exists():
-            return Response({'error': 'Convite já pendente.'}, status=400)
+            return Response({'error': 'Já existe um convite pendente para este e-mail.'}, status=400)
+
         if HouseMember.objects.filter(house=house, user__email=email).exists():
-             return Response({'error': 'Usuário já na casa.'}, status=400)
+             return Response({'error': 'Este usuário já faz parte da casa.'}, status=400)
 
         invitation = HouseInvitation.objects.create(house=house, inviter=user, email=email)
-        # Atenção ao IP/Porta do Frontend aqui
-        invite_link = f"http://localhost:5173/accept-invite/{invitation.id}" 
+        invite_link = f"http://localhost:5173/accept-invite/{invitation.id}"
         
         try:
             send_mail(
-                f"Convite: {house.name}",
-                f"Entre na casa: {invite_link}",
-                settings.EMAIL_HOST_USER,
-                [email],
-                fail_silently=False,
+                f"Convite: Junte-se à casa {house.name}",
+                f"Olá! {user.username} convidou você.\nLink: {invite_link}",
+                settings.EMAIL_HOST_USER, [email], fail_silently=False,
             )
-            return Response({'message': 'E-mail enviado!'})
+            return Response({'message': 'Convite enviado por e-mail!'})
         except:
-            print(f"LINK CONVITE: {invite_link}")
+            print(f"Link do convite: {invite_link}")
             return Response({'message': 'Convite criado (Link no terminal).'})
 
     def destroy(self, request, pk=None):
@@ -1057,24 +685,247 @@ class InvitationViewSet(viewsets.ViewSet):
         try:
             invite = HouseInvitation.objects.get(id=pk, house=house)
             invite.delete()
-            return Response({'message': 'Cancelado.'})
-        except:
-            return Response({'error': 'Não encontrado.'}, status=404)
+            return Response({'message': 'Convite cancelado.'}, status=status.HTTP_200_OK)
+        except HouseInvitation.DoesNotExist:
+            return Response({'error': 'Convite não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+
+    # --- SWAP DE CASA (TROCA) ---
+    @action(detail=False, methods=['post'], url_path='join')
+    def join_house(self, request):
+        token = request.data.get('token')
+        user = request.user
+
+        if not token: return Response({'error': 'Token não fornecido.'}, status=400)
+
+        try:
+            invite = HouseInvitation.objects.get(id=token, accepted=False)
+            
+            # Limpeza: Encontra e deleta a casa padrão criada pelo signal
+            try:
+                default_member = HouseMember.objects.get(user=user, role='ADMIN')
+                default_house = default_member.house
+                # Só deleta se a casa tiver apenas 1 membro (o próprio usuário)
+                if HouseMember.objects.filter(house=default_house).count() == 1:
+                    default_member.delete()
+                    default_house.delete()
+                else:
+                    default_member.delete()
+            except ObjectDoesNotExist:
+                pass 
+
+            HouseMember.objects.create(user=user, house=invite.house, role='MEMBER')
+            invite.accepted = True
+            invite.delete()
+            return Response({'message': f'Bem-vindo à casa {invite.house.name}!'}, status=200)
+
+        except HouseInvitation.DoesNotExist:
+            return Response({'error': 'Convite inválido ou expirado.'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=400)
+
+    # ACEITAR CONVITE (Lógica para não logados ou switch manual)
+    @action(detail=False, methods=['post'])
+    def accept(self, request):
+        token = request.data.get('token')
+        user = request.user
+        if not token: return Response({'error': 'Token de convite não fornecido.'}, status=400)
         
+        try:
+            invitation = HouseInvitation.objects.get(id=token, accepted=False)
+            if invitation.email != user.email:
+                return Response({'error': 'Este convite não é para o seu e-mail.'}, status=status.HTTP_403_FORBIDDEN)
+            if HouseMember.objects.filter(user=user, house=invitation.house).exists():
+                invitation.delete()
+                return Response({'error': 'Você já é membro desta casa.'}, status=400)
+
+            HouseMember.objects.create(user=user, house=invitation.house, role='MEMBER')
+            invitation.accepted = True
+            invitation.save()
+            return Response({'message': f'Bem-vindo à casa {invitation.house.name}!'})
+        except HouseInvitation.DoesNotExist:
+            return Response({'error': 'Convite inválido.'}, status=404)
+
+class RegisterView(APIView):
+    permission_classes = [AllowAny] 
+
+    def post(self, request):
+        username = request.data.get('username')
+        email = request.data.get('email')
+        password = request.data.get('password')
+        invitation_token = request.data.get('invitation_token') 
+
+        if not username or not password or not email:
+            return Response({'error': 'Preencha todos os campos.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # VALIDAÇÃO DO CONVITE (Porteiro)
+        if invitation_token:
+            try:
+                invite = HouseInvitation.objects.get(id=invitation_token, accepted=False)
+                if invite.email != email:
+                    return Response({'error': f'O convite é para {invite.email}, não {email}.'}, status=400)
+            except (ObjectDoesNotExist, ValueError):
+                return Response({'error': 'Convite inválido.'}, status=400)
+
+        if User.objects.filter(username=username).exists():
+            return Response({'error': 'Usuário já existe.'}, status=400)
+        if User.objects.filter(email=email).exists():
+            return Response({'error': 'E-mail já cadastrado.'}, status=400)
+
+        try:
+            validate_password(password)
+        except ValidationError as e:
+            return Response({'error': ' '.join(e.messages)}, status=400)
+
+        try:
+            user = User.objects.create_user(username=username, email=email, password=password)
+            
+            # Cria casa padrão apenas se não houver convite (signals geralmente criam, mas garantimos aqui)
+            if not HouseMember.objects.filter(user=user).exists():
+                house = House.objects.create(name=f"Casa de {username}")
+                HouseMember.objects.create(user=user, house=house, role='ADMIN')
+
+            token, _ = Token.objects.get_or_create(user=user)
+            return Response({
+                'token': token.key, 'user_id': user.pk,
+                'username': user.username, 'email': user.email
+            }, status=status.HTTP_201_CREATED)
+            
+        except IntegrityError:
+            return Response({'error': 'Erro de integridade.'}, status=400)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
 class CustomAuthToken(ObtainAuthToken):
-    """
-    View de Login personalizada que retorna Token + Dados do Usuário.
-    Isso garante que o frontend receba o 'username' correto mesmo logando com e-mail.
-    """
     def post(self, request, *args, **kwargs):
         serializer = self.serializer_class(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data['user']
         token, created = Token.objects.get_or_create(user=user)
-        
         return Response({
-            'token': token.key,
-            'user_id': user.pk,
-            'username': user.username, # <--- O DADO IMPORTANTE
-            'email': user.email
+            'token': token.key, 'user_id': user.pk,
+            'username': user.username, 'email': user.email
         })
+
+class AuthViewSet(viewsets.ViewSet):
+    """
+    ViewSet para gerenciar ações de conta (Senha e Email)
+    """
+
+    # 1. SOLICITAR REDEFINIÇÃO
+    @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
+    def request_password_reset(self, request):
+        # Usa o serializer apenas para validar formato do email
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email']
+            try:
+                user = User.objects.get(email=email)
+            except User.DoesNotExist:
+                # Segurança: não avisar se não existe
+                return Response({'status': 'Se o e-mail existir, um link foi enviado.'})
+
+            # USA O NOSSO GERADOR CUSTOMIZADO
+            token = custom_token_generator.make_token(user)
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            
+            # Ajuste a porta se seu frontend não for 5173
+            reset_link = f"http://localhost:5173/reset-password/{uid}/{token}"
+
+            # Debug no terminal (MANTENHA ISSO)
+            print(f"\n📧 [DEBUG] LINK GERADO PARA {email}:", file=sys.stderr)
+            print(f"{reset_link}\n", file=sys.stderr)
+
+            # --- CORREÇÃO DE FORMATAÇÃO DO E-MAIL ---
+            send_mail(
+                subject='Redefinição de Senha - Domo',
+                message=f"""Olá {user.username},
+
+                        Recebemos uma solicitação para redefinir sua senha.
+                        Clique no link abaixo (ou copie e cole no navegador):
+
+                        <{reset_link}>
+
+                        Se não foi você, apenas ignore este e-mail.
+                        """,
+                from_email='noreply@domo.app',
+                recipient_list=[email],
+                fail_silently=False,
+            )
+            return Response({'status': 'Link enviado.'})
+        return Response(serializer.errors, status=400)
+
+    # 2. CONFIRMAR REDEFINIÇÃO (Versão "Nuclear" de Debug)
+    @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
+    def confirm_password_reset(self, request):
+        print("\n--- [DEBUG] INICIANDO CONFIRM PASSWORD ---", file=sys.stderr, flush=True)
+        
+        # Ignoramos a validação automática do serializer para evitar erros ocultos
+        data = request.data
+        raw_uid = data.get('uid', '')
+        raw_token = data.get('token', '')
+        new_password = data.get('new_password', '')
+
+        print(f"📥 [DEBUG] Token Recebido (Bruto): '{raw_token}'", file=sys.stderr, flush=True)
+
+        # 1. Limpeza
+        uid = raw_uid.strip()
+        token = raw_token.strip().replace('/', '') # Remove barra final se existir
+        
+        # 2. Decodificação do UID
+        try:
+            user_id = force_str(urlsafe_base64_decode(uid))
+            user = User.objects.get(pk=user_id)
+            print(f"✅ [DEBUG] Usuário encontrado: {user.username} (ID: {user_id})", file=sys.stderr, flush=True)
+        except (TypeError, ValueError, OverflowError):
+            print("❌ [DEBUG] Erro: UID inválido/corrompido.", file=sys.stderr, flush=True)
+            return Response({'error': 'Link inválido (UID).'}, status=400)
+        except User.DoesNotExist:
+            print("❌ [DEBUG] Erro: Usuário não existe.", file=sys.stderr, flush=True)
+            return Response({'error': 'Usuário não encontrado.'}, status=400)
+
+        # 3. Verificação do Token (USANDO O MESMO GERADOR CUSTOMIZADO)
+        is_valid = custom_token_generator.check_token(user, token)
+        
+        print(f"🛡️ [DEBUG] Check Token Resultado: {is_valid}", file=sys.stderr, flush=True)
+
+        if is_valid:
+            try:
+                validate_password(new_password, user)
+            except ValidationError as e:
+                return Response({'error': ' '.join(e.messages)}, status=400)
+
+            user.set_password(new_password)
+            user.save()
+            print("🚀 [DEBUG] Sucesso! Senha alterada.", file=sys.stderr, flush=True)
+            return Response({'status': 'Senha redefinida com sucesso!'})
+        
+        # Diagnóstico final no terminal
+        print(f"❌ [DEBUG] TOKEN INVÁLIDO. Hash esperado (parcial): {custom_token_generator._make_hash_value(user, int(datetime.datetime.now().timestamp()))}", file=sys.stderr, flush=True)
+        return Response({'error': 'Token inválido ou expirado.'}, status=400)
+    
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def change_password(self, request):
+        serializer = ChangePasswordSerializer(data=request.data)
+        if serializer.is_valid():
+            user = request.user
+            if not user.check_password(serializer.validated_data['old_password']):
+                return Response({'error': 'Senha atual incorreta.'}, status=400)
+            user.set_password(serializer.validated_data['new_password'])
+            user.save()
+            return Response({'status': 'Senha alterada.'})
+        return Response(serializer.errors, status=400)
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def change_email(self, request):
+        serializer = ChangeEmailSerializer(data=request.data)
+        if serializer.is_valid():
+            user = request.user
+            if not user.check_password(serializer.validated_data['password']):
+                return Response({'error': 'Senha incorreta.'}, status=400)
+            new_email = serializer.validated_data['new_email']
+            if User.objects.filter(email=new_email).exclude(pk=user.pk).exists():
+                return Response({'error': 'Este e-mail já está em uso.'}, status=400)
+            user.email = new_email
+            user.save()
+            return Response({'status': 'E-mail atualizado.'})
+        return Response(serializer.errors, status=400)
