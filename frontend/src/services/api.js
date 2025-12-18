@@ -1,13 +1,13 @@
 import axios from 'axios';
 
+// LÓGICA INTELIGENTE:
+// Se existir a variável VITE_API_URL (na Vercel), usa ela.
+// Se NÃO existir (na sua máquina), usa o localhost.
 const api = axios.create({
-  // O ERRO ESTÁ PROVAVELMENTE AQUI:
-  // Certifique-se de que tem o "/api" no final
-  baseURL: 'http://localhost:8000/api', 
+  baseURL: import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api',
 });
 
-// Interceptor para adicionar o token (Mantenha o que você já tem abaixo)
-api.interceptors.request.use((config) => {
+api.interceptors.request.use(async config => {
   const token = localStorage.getItem('token');
   if (token) {
     config.headers.Authorization = `Token ${token}`;
