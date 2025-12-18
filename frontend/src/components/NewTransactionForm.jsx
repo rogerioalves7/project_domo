@@ -139,16 +139,19 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
       {/* 2. Data e Categoria */}
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">
-            Data
-          </label>
+          {/* Forçamos h-6 para alinhar com o label da categoria que tem botão */}
+          <div className="flex justify-between items-center mb-1 h-6">
+            <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">
+              Data
+            </label>
+          </div>
           <div className="relative">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
                 <Calendar size={18} />
             </div>
             <input 
               type="date" 
-              className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white transition-all text-sm font-medium"
+              className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white transition-all text-sm font-medium h-[46px]" // h-[46px] garante altura igual
               value={date}
               onChange={e => setDate(e.target.value)}
             />
@@ -156,7 +159,8 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
         </div>
 
         <div>
-          <div className="flex justify-between items-center mb-1">
+          {/* Container do label com altura fixa h-6 */}
+          <div className="flex justify-between items-center mb-1 h-6">
             <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">
                 Categoria
             </label>
@@ -169,7 +173,7 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
                 <Tag size={18} />
             </div>
             <select 
-              className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white transition-all text-sm font-medium appearance-none"
+              className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white transition-all text-sm font-medium appearance-none h-[46px]" // h-[46px] garante altura igual
               value={categoryId}
               onChange={e => setCategoryId(e.target.value)}
             >

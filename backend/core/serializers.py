@@ -220,11 +220,11 @@ class TransactionSerializer(serializers.ModelSerializer):
 
         # 2. LÓGICA DE CONTA
         elif account:
-            if validated_data['type'] == 'EXPENSE':
+            '''if validated_data['type'] == 'EXPENSE':
                 account.balance -= validated_data['value']
             else:
                 account.balance += validated_data['value']
-            account.save()
+            account.save()'''
             validated_data['is_shared'] = account.is_shared
 
         else:
