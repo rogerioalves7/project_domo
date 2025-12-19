@@ -207,31 +207,27 @@ class TransactionSerializer(serializers.ModelSerializer):
         elif initial_invoice:
             card = initial_invoice.card
 
-        # 1. LÓGICA DE CARTÃO
+        # 1. LÓGICA DE CARTÃO (Fatura Inteligente)
         if card and not account:
             transaction_date = validated_data.get('date')
             correct_invoice = self._get_correct_invoice(card, transaction_date)
             
             validated_data['invoice'] = correct_invoice
-            correct_invoice.value += validated_data['value']
+            correct_invoice.value += validated_data['value'] # Atualiza Fatura
             correct_invoice.save()
             
             validated_data['is_shared'] = card.is_shared
 
         # 2. LÓGICA DE CONTA
         elif account:
-            '''if validated_data['type'] == 'EXPENSE':
-                account.balance -= validated_data['value']
-            else:
-                account.balance += validated_data['value']
-            account.save()'''
-            validated_data['is_shared'] = account.is_shared
-
-        else:
-            validated_data['is_shared'] = False
+            # if validated_data['type'] == 'EXPENSE':
+            #    account.balance -= validated_data['value']
+            # else:
+            #    account.balance += validated_data['value']
+            # account.save()
             
-        return super().create(validated_data)
-
+            validated_data['is_shared'] = account.is_shared
+    
 # --- ESTOQUE E COMPRAS ---
 
 class ProductSerializer(serializers.ModelSerializer):

@@ -136,13 +136,13 @@ class Transaction(models.Model):
         # 3. Salva a transação no banco
         super().save(*args, **kwargs)
 
-        # 4. Lógica de Atualização de Saldo (Opcional, se você estiver usando)
+'''        # 4. Lógica de Atualização de Saldo (Opcional, se você estiver usando)
         if is_new and self.account:
             if self.type == 'EXPENSE':
                 self.account.balance -= self.value
             elif self.type == 'INCOME':
                 self.account.balance += self.value
-            self.account.save()
+            self.account.save()'''
 
 # --- MÓDULO ESTOQUE ---
 
