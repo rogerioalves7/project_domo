@@ -4,6 +4,7 @@ from django.utils import timezone
 from datetime import date
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from decimal import Decimal
 import uuid
 
 # --- GESTÃO DA CASA (MULTI-TENANCY) ---
@@ -161,6 +162,49 @@ class InventoryItem(models.Model):
 
     def __str__(self):
         return f"{self.product.name}: {self.quantity}"
+
+    def save(self, *args, **kwargs):
+        # 1. Salva o dado no banco
+        super().save(*args, **kwargs)
+        # 2. Roda a automação
+        self.update_shopping_list()
+
+    def update_shopping_list(self):
+        from .models import ShoppingList 
+
+        current_qty = Decimal(str(self.quantity))
+        min_qty = Decimal(str(self.min_quantity))
+
+        # Busca itens na lista (e remove duplicatas se houver sujeira antiga)
+        shopping_queryset = ShoppingList.objects.filter(
+            house=self.house, 
+            product=self.product
+        )
+
+        # LÓGICA ESTRITA: Só compra se for MENOR (<) que o mínimo.
+        # Se for IGUAL, considera saudável e não compra.
+        if current_qty < min_qty:
+            needed_qty = min_qty - current_qty
+            if needed_qty <= 0: needed_qty = Decimal('1')
+
+            if shopping_queryset.count() > 1:
+                shopping_queryset.delete() # Limpa duplicatas
+                ShoppingList.objects.create(
+                    house=self.house,
+                    product=self.product,
+                    quantity_to_buy=needed_qty,
+                    is_purchased=False
+                )
+            else:
+                ShoppingList.objects.update_or_create(
+                    house=self.house,
+                    product=self.product,
+                    defaults={'quantity_to_buy': needed_qty, 'is_purchased': False}
+                )
+        else:
+            # Se o estoque está OK (>=), o item NÃO deve existir na lista
+            if shopping_queryset.exists():
+                shopping_queryset.delete()
 
 class ShoppingList(models.Model):
     house = models.ForeignKey(House, on_delete=models.CASCADE, related_name='shopping_list')
