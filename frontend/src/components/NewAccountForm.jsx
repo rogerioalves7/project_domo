@@ -8,32 +8,31 @@ import { useTheme } from '../context/ThemeContext';
 export default function NewAccountForm({ onSuccess, onBack, initialData = null }) {
   const { theme } = useTheme();
   
-  // Inicializamos com string vazia para o useEffect controlar o preenchimento
   const [name, setName] = useState('');
-  const [balance, setBalance] = useState('');
-  const [limit, setLimit] = useState(''); // <--- CORREÇÃO: Inicializa vazio para evitar conflitos
+  const [balance, setBalance] = useState(''); // Estado inicia vazio ou numérico
+  const [limit, setLimit] = useState('');
   const [isShared, setIsShared] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // --- 1. CARREGAR DADOS (CORREÇÃO DE CARGA) ---
+  // --- 1. CARREGAR DADOS ---
   useEffect(() => {
     if (initialData) {
       setName(initialData.name);
       setIsShared(initialData.is_shared);
       
-      // Carrega o Saldo
-      if (initialData.balance !== undefined) {
-          setBalance(initialData.balance);
+      // CORREÇÃO: Converte explicitamente para float ao carregar.
+      // Isso garante que se a API enviar "1200.50" (string), o estado receba 1200.5 (number).
+      if (initialData.balance !== undefined && initialData.balance !== null) {
+          setBalance(parseFloat(initialData.balance));
       }
       
-      // Carrega o Limite (CORREÇÃO DO PONTO C ESTENDIDA)
-      if (initialData.limit !== undefined) {
-          setLimit(initialData.limit);
+      if (initialData.limit !== undefined && initialData.limit !== null) {
+          setLimit(parseFloat(initialData.limit));
       }
     }
   }, [initialData]);
 
-  // --- LÓGICA DE EXCLUSÃO (MANTIDA) ---
+  // --- LÓGICA DE EXCLUSÃO ---
   async function executeDelete(toastId) {
     toast.dismiss(toastId);
     setLoading(true);
@@ -71,24 +70,21 @@ export default function NewAccountForm({ onSuccess, onBack, initialData = null }
     });
   }
 
-  // --- LÓGICA DE SALVAR (CORREÇÃO DE ENVIO) ---
+  // --- LÓGICA DE SALVAR ---
   async function handleSubmit(e) {
     e.preventDefault();
     if (!name) return toast.error("O nome da conta é obrigatório.");
 
     setLoading(true);
     try {
-      // Função auxiliar robusta para converter string formatada (1.000,00) em float (1000.00)
-      const parseCurrency = (val) => {
-          if (typeof val === 'number') return val;
-          if (!val) return 0;
-          return parseFloat(val.toString().replace(/\./g, '').replace(',', '.'));
-      };
-
+      // CORREÇÃO: Removemos a função parseCurrency.
+      // O MoneyInput já entrega o valor numérico correto (float) no estado.
+      // Apenas garantimos que se estiver vazio, enviamos 0.
+      
       const payload = {
         name,
-        balance: parseCurrency(balance), // Limpa o saldo
-        limit: parseCurrency(limit),     // Limpa o limite (CORREÇÃO APLICADA)
+        balance: balance === '' ? 0 : balance, 
+        limit: limit === '' ? 0 : limit,
         is_shared: isShared
       };
 
@@ -112,7 +108,7 @@ export default function NewAccountForm({ onSuccess, onBack, initialData = null }
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       
-      {/* Cabeçalho Visual (LAYOUT ANTIGO PRESERVADO) */}
+      {/* Cabeçalho Visual */}
       <div className="flex items-center gap-3 p-4 bg-teal-50 dark:bg-teal-900/20 rounded-xl border border-teal-100 dark:border-teal-900/30">
         <div className="p-3 bg-teal-100 dark:bg-teal-800 rounded-full text-teal-600 dark:text-teal-300">
             <Wallet size={24} />
@@ -145,6 +141,7 @@ export default function NewAccountForm({ onSuccess, onBack, initialData = null }
         <div className="grid grid-cols-2 gap-4">
             <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Saldo Atual</label>
+                {/* MoneyInput: Recebe float, exibe formatado, devolve float no onChange */}
                 <MoneyInput 
                     value={balance} 
                     onValueChange={setBalance} 
@@ -156,7 +153,6 @@ export default function NewAccountForm({ onSuccess, onBack, initialData = null }
                     <label className="block text-xs font-bold text-gray-500 uppercase">Limite</label>
                     <span className="text-[10px] bg-gray-100 dark:bg-slate-700 text-gray-500 px-1.5 py-0.5 rounded" title="Cheque Especial">Opcional</span>
                 </div>
-                {/* MoneyInput agora recebe e envia dados controlados pela função parseCurrency no submit */}
                 <MoneyInput 
                     value={limit} 
                     onValueChange={setLimit} 

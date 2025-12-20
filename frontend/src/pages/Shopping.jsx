@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query'; // <--- NOVOS IMPORTS
 import api from '../services/api';
 import Sidebar from '../components/Sidebar';
 import MobileMenu from '../components/MobileMenu';
@@ -11,63 +12,56 @@ import {
 import toast from 'react-hot-toast';
 
 export default function Shopping() {
-  // --- ESTADOS DE DADOS ---
-  const [items, setItems] = useState([]);
-  const [accounts, setAccounts] = useState([]); 
-  const [cards, setCards] = useState([]);       
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient(); // <--- O GERENCIADOR DE CACHE
   
-  // --- ESTADOS DE UI ---
-  const [totalEstimated, setTotalEstimated] = useState(0);
-  const [totalReal, setTotalReal] = useState(0);
-  const [totalDiscount, setTotalDiscount] = useState(0);
-
+  // --- ESTADOS DE UI (Modais e Visualização) ---
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalView, setModalView] = useState('PRODUCT_SELECT'); 
-
-  // --- ESTADOS DE PAGAMENTO ---
-  const [paymentMethod, setPaymentMethod] = useState('ACCOUNT'); // 'ACCOUNT' ou 'CREDIT_CARD'
+  const [paymentMethod, setPaymentMethod] = useState('ACCOUNT');
   const [selectedSource, setSelectedSource] = useState('');
 
-  // --- CARREGAMENTO INICIAL ---
-  async function loadData() {
-    setLoading(true);
-    try {
-      // Busca tudo de uma vez para garantir que temos contas/cartões ao abrir o modal
-      const [listRes, accRes, cardRes] = await Promise.all([
-        api.get('/shopping-list/', { params: { _t: new Date().getTime() } }),
-        api.get('/accounts/'),
-        api.get('/credit-cards/')
-      ]);
+  // --- 1. LEITURA DE DADOS COM REACT QUERY (CACHE) ---
+  
+  // Busca Lista de Compras
+  const { data: items = [], isLoading: loadingList, isRefetching } = useQuery({
+    queryKey: ['shopping-list'],
+    queryFn: async () => {
+      const { data } = await api.get('/shopping-list/');
+      return data;
+    },
+    // Se der erro (sem internet), usa o cache antigo se existir
+  });
 
-      const listData = Array.isArray(listRes.data) ? listRes.data : [];
-      setItems(listData);
-      setAccounts(accRes.data);
-      setCards(cardRes.data);
-      
-      calculateTotals(listData);
-    } catch (error) {
-      console.error("Erro ao carregar dados:", error);
-      toast.error("Erro de conexão.");
-      setItems([]);
-    } finally {
-      setLoading(false);
+  // Busca Contas
+  const { data: accounts = [] } = useQuery({
+    queryKey: ['accounts'],
+    queryFn: async () => {
+      const { data } = await api.get('/accounts/');
+      return data;
     }
-  }
+  });
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  // Busca Cartões
+  const { data: cards = [] } = useQuery({
+    queryKey: ['credit-cards'],
+    queryFn: async () => {
+      const { data } = await api.get('/credit-cards/');
+      return data;
+    }
+  });
 
-  // --- CÁLCULOS ---
-  function calculateTotals(currentItems) {
+  // Loading geral é verdadeiro se a lista estiver carregando pela PRIMEIRA vez
+  const loading = loadingList;
+
+  // --- 2. CÁLCULOS AUTOMÁTICOS (useMemo) ---
+  // Não precisamos mais de uma função calculateTotals separada. 
+  // O React recalcula sempre que 'items' mudar.
+  const { totalEstimated, totalReal, totalDiscount } = useMemo(() => {
     let est = 0;
     let real = 0;
     let disc = 0;
 
-    if (!currentItems || !Array.isArray(currentItems)) return;
-
-    currentItems.forEach(item => {
+    items.forEach(item => {
         const qty = parseFloat(item?.quantity_to_buy || 0);
         const estUnit = parseFloat(item?.estimated_price || 0);
         const realUnit = parseFloat(item?.real_unit_price || 0);
@@ -84,26 +78,28 @@ export default function Shopping() {
         }
     });
 
-    setTotalEstimated(est);
-    setTotalReal(real);
-    setTotalDiscount(disc);
-  }
+    return { totalEstimated: est, totalReal: real, totalDiscount: disc };
+  }, [items]);
 
-  // --- AÇÕES DO ITEM (Update, Delete) ---
+  // --- 3. AÇÕES (Por enquanto, apenas invalida o cache para atualizar) ---
+
   async function updateItem(id, field, value) {
-    const newItems = items.map(i => i.id === id ? { ...i, [field]: value } : i);
-    setItems(newItems);
-    calculateTotals(newItems);
-    try { await api.patch(`/shopping-list/${id}/`, { [field]: value }); } catch (e) { console.error(e); }
+    // Nota: No próximo passo transformaremos isso em "Optimistic UI"
+    try { 
+        await api.patch(`/shopping-list/${id}/`, { [field]: value });
+        // Avisa o React Query que os dados mudaram e ele recarrega sozinho
+        queryClient.invalidateQueries(['shopping-list']);
+    } catch (e) { 
+        console.error(e); 
+        toast.error("Erro ao atualizar.");
+    }
   }
 
   async function deleteItem(id) {
     try {
         await api.delete(`/shopping-list/${id}/`);
-        const newItems = items.filter(i => i.id !== id);
-        setItems(newItems);
-        calculateTotals(newItems);
         toast.success("Item removido.");
+        queryClient.invalidateQueries(['shopping-list']);
     } catch (error) { toast.error("Erro ao remover."); }
   }
 
@@ -112,7 +108,7 @@ export default function Shopping() {
         await api.post('/shopping-list/', { product: productId, quantity_to_buy: 1 });
         toast.success("Adicionado!");
         setIsModalOpen(false);
-        loadData(); 
+        queryClient.invalidateQueries(['shopping-list']);
     } catch (error) { toast.error("Erro ao adicionar."); }
   }
 
@@ -121,7 +117,7 @@ export default function Shopping() {
     const purchasedCount = items.filter(i => i.is_purchased).length;
     if (purchasedCount === 0) return toast.error("Marque itens como comprados.");
     
-    // Define padrão inicial inteligente
+    // Define padrão inicial
     if (accounts.length > 0) {
         setPaymentMethod('ACCOUNT');
         setSelectedSource(accounts[0].id);
@@ -141,23 +137,23 @@ export default function Shopping() {
     if (!selectedSource) return toast.error("Selecione onde debitar.");
 
     try {
-        setLoading(true);
-        const response = await api.post('/shopping-list/finish/', {
+        await api.post('/shopping-list/finish/', {
             payment_method: paymentMethod,
             source_id: selectedSource,
-            // Envia o valor final (com desconto se houver, senão o real)
             total_value: totalDiscount > 0 ? totalDiscount : totalReal,
             date: new Date().toISOString().split('T')[0]
         });
         
-        toast.success(response.data.message);
+        toast.success("Compra finalizada!");
         setIsModalOpen(false);
-        loadData(); // Recarrega para limpar lista e atualizar saldos
+        // Atualiza TUDO (Lista limpa, saldo da conta mudou, fatura mudou)
+        queryClient.invalidateQueries(['shopping-list']);
+        queryClient.invalidateQueries(['accounts']);
+        queryClient.invalidateQueries(['credit-cards']);
+        queryClient.invalidateQueries(['inventory']); // Estoque também muda
     } catch (error) {
         console.error(error);
         toast.error(error.response?.data?.error || "Erro ao finalizar.");
-    } finally {
-        setLoading(false);
     }
   }
 
@@ -178,8 +174,9 @@ export default function Shopping() {
                         <ShoppingCart className="text-teal-500" /> Lista de Compras
                     </h1>
                     <div className="flex gap-2">
-                        <button onClick={loadData} className="bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 p-3 rounded-xl shadow border border-gray-200 dark:border-slate-700 transition active:scale-95 hover:bg-gray-50">
-                            <RefreshCw size={24} className={loading ? "animate-spin" : ""} />
+                        {/* Botão de Refresh Manual (Chama refetch do React Query) */}
+                        <button onClick={() => queryClient.invalidateQueries(['shopping-list'])} className="bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 p-3 rounded-xl shadow border border-gray-200 dark:border-slate-700 transition active:scale-95 hover:bg-gray-50">
+                            <RefreshCw size={24} className={isRefetching ? "animate-spin" : ""} />
                         </button>
                         <button onClick={() => { setModalView('PRODUCT_SELECT'); setIsModalOpen(true); }} className="bg-teal-600 hover:bg-teal-500 text-white p-3 rounded-xl shadow-lg transition active:scale-95">
                             <Plus size={24} />
@@ -207,7 +204,7 @@ export default function Shopping() {
             {/* Lista de Itens */}
             <main className="px-4 md:px-8 pb-32 md:pb-10">
                 <div className="space-y-4">
-                    {items && items.map(item => (
+                    {items.map(item => (
                         <div key={item.id} className={`flex flex-col gap-3 md:gap-4 p-4 rounded-2xl border transition-all shadow-sm ${item.is_purchased ? 'bg-emerald-50/50 border-emerald-200 dark:bg-emerald-900/10 dark:border-emerald-900/30' : 'bg-white dark:bg-[#1E293B] border-gray-100 dark:border-slate-700'}`}>
                             
                             {/* Linha Superior */}
@@ -257,7 +254,7 @@ export default function Shopping() {
                     <div className="text-center py-10 text-gray-400">
                         <ShoppingCart size={48} className="mx-auto mb-3 opacity-50" />
                         <p>Lista de compras vazia.</p>
-                        <button onClick={loadData} className="mt-4 text-teal-600 flex items-center gap-2 mx-auto text-sm font-bold border border-teal-200 px-4 py-2 rounded-lg hover:bg-teal-50 transition">
+                        <button onClick={() => queryClient.invalidateQueries(['shopping-list'])} className="mt-4 text-teal-600 flex items-center gap-2 mx-auto text-sm font-bold border border-teal-200 px-4 py-2 rounded-lg hover:bg-teal-50 transition">
                             <RefreshCw size={16}/> Sincronizar Agora
                         </button>
                     </div>
@@ -266,7 +263,7 @@ export default function Shopping() {
         </div>
 
         {/* FAB (Botão Finalizar) */}
-        {items && items.some(i => i.is_purchased) && (
+        {items.some(i => i.is_purchased) && (
             <div className="absolute bottom-24 right-6 md:bottom-10 md:right-10 z-50 animate-bounce-in">
                 <button 
                     onClick={openPaymentModal}
@@ -302,7 +299,6 @@ export default function Shopping() {
                         <button 
                             onClick={() => {
                                 setPaymentMethod('ACCOUNT');
-                                // CORREÇÃO 1: Reseta o source para a primeira conta válida
                                 setSelectedSource(accounts.length > 0 ? accounts[0].id : '');
                             }}
                             className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition ${paymentMethod === 'ACCOUNT' ? 'border-teal-500 bg-teal-50 dark:bg-teal-900/20 text-teal-700 dark:text-teal-400' : 'border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-800'}`}
@@ -313,7 +309,6 @@ export default function Shopping() {
                         <button 
                             onClick={() => {
                                 setPaymentMethod('CREDIT_CARD');
-                                // CORREÇÃO 2: Reseta o source para o primeiro cartão válido
                                 setSelectedSource(cards.length > 0 ? cards[0].id : '');
                             }}
                             className={`p-3 rounded-xl border flex flex-col items-center gap-2 transition ${paymentMethod === 'CREDIT_CARD' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400' : 'border-gray-200 dark:border-slate-700 hover:bg-gray-50 dark:hover:bg-slate-800'}`}
@@ -345,10 +340,9 @@ export default function Shopping() {
 
                 <button 
                     onClick={confirmFinish}
-                    disabled={loading}
                     className="w-full bg-teal-600 text-white font-bold py-3.5 rounded-xl hover:bg-teal-500 active:scale-95 transition shadow-lg flex items-center justify-center gap-2"
                 >
-                    {loading ? "Processando..." : "Confirmar e Atualizar Estoque"}
+                    Confirmar e Atualizar Estoque
                 </button>
             </div>
         )}
@@ -361,7 +355,9 @@ export default function Shopping() {
 function ManualAddForm({ onAdd, onCreateNew }) {
     const [products, setProducts] = useState([]);
     const [selected, setSelected] = useState('');
-    useEffect(() => { api.get('/products/').then(r => setProducts(r.data)).catch(() => {}); }, []);
+    // Aqui também poderíamos usar useQuery, mas vamos manter simples por enquanto
+    useState(() => { api.get('/products/').then(r => setProducts(r.data)).catch(() => {}); }, []);
+    
     return (
         <div className="space-y-4">
             <select className="w-full p-3 rounded-xl bg-gray-50 border dark:bg-slate-800 dark:border-slate-700 dark:text-white" value={selected} onChange={e => setSelected(e.target.value)}>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import MoneyInput from './MoneyInput';
@@ -8,15 +8,33 @@ import { useTheme } from '../context/ThemeContext';
 export default function NewCreditCardForm({ onSuccess, onBack, initialData = null }) {
   const { theme } = useTheme();
   
-  // --- INICIALIZAÇÃO DIRETA (Igual ao NewAccountForm) ---
-  // Recebe o valor bruto do banco (Float) ou 0. Não formatamos aqui.
-  const [name, setName] = useState(initialData?.name || '');
-  const [limit, setLimit] = useState(initialData?.limit_total || 0);
-  const [limitAvailable, setLimitAvailable] = useState(initialData?.limit_available || 0);
-  const [closingDay, setClosingDay] = useState(initialData?.closing_day || '');
-  const [dueDay, setDueDay] = useState(initialData?.due_day || '');
-  const [isShared, setIsShared] = useState(initialData?.is_shared || false);
+  // Inicializamos os estados vazios ou com defaults seguros
+  const [name, setName] = useState('');
+  const [limit, setLimit] = useState('');
+  const [limitAvailable, setLimitAvailable] = useState('');
+  const [closingDay, setClosingDay] = useState('');
+  const [dueDay, setDueDay] = useState('');
+  const [isShared, setIsShared] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // --- 1. CARREGAR DADOS (Igual ao NewAccountForm) ---
+  useEffect(() => {
+    if (initialData) {
+      setName(initialData.name || '');
+      setClosingDay(initialData.closing_day || '');
+      setDueDay(initialData.due_day || '');
+      setIsShared(initialData.is_shared || false);
+
+      // Conversão explícita para float ao carregar para evitar problemas com strings da API
+      if (initialData.limit_total !== undefined && initialData.limit_total !== null) {
+        setLimit(parseFloat(initialData.limit_total));
+      }
+
+      if (initialData.limit_available !== undefined && initialData.limit_available !== null) {
+        setLimitAvailable(parseFloat(initialData.limit_available));
+      }
+    }
+  }, [initialData]);
 
   // --- EXCLUSÃO ---
   async function executeDelete(toastId) {
@@ -67,26 +85,18 @@ export default function NewCreditCardForm({ onSuccess, onBack, initialData = nul
 
     setLoading(true);
     try {
-      // Função robusta: 
-      // 1. Se for número (ex: não editou o campo), mantém número.
-      // 2. Se for string (ex: editou), limpa formatação BR.
-      const parseCurrency = (val) => {
-          if (!val) return 0;
-          if (typeof val === 'number') return val;
-          return parseFloat(val.toString().replace(/\./g, '').replace(',', '.'));
-      };
-
-      // Se for criação e não preencher disponível, assume igual ao total
-      // Se for edição, respeita o valor (mesmo que seja 0)
-      const cleanLimit = parseCurrency(limit);
-      const cleanAvailable = (limitAvailable === '' || limitAvailable === null) 
-          ? cleanLimit 
-          : parseCurrency(limitAvailable);
+      // CORREÇÃO: Removemos parseCurrency. Usamos os valores numéricos do estado.
+      const finalLimit = limit === '' ? 0 : limit;
+      
+      // Regra de negócio: Se o disponível não for preenchido na criação, assume o total.
+      const finalAvailable = (limitAvailable === '' || limitAvailable === null) 
+          ? finalLimit 
+          : limitAvailable;
 
       const payload = {
         name,
-        limit_total: cleanLimit,
-        limit_available: cleanAvailable,
+        limit_total: finalLimit,
+        limit_available: finalAvailable,
         closing_day: parseInt(closingDay),
         due_day: parseInt(dueDay),
         is_shared: isShared
@@ -156,12 +166,13 @@ export default function NewCreditCardForm({ onSuccess, onBack, initialData = nul
                 <MoneyInput 
                     value={limitAvailable} 
                     onValueChange={setLimitAvailable} 
-                    placeholder={typeof limit === 'number' ? limit.toFixed(2) : limit || "0,00"} 
+                    // Se o limite total mudar e disponível estiver vazio, sugere visualmente o total no placeholder
+                    placeholder={typeof limit === 'number' && limit > 0 ? limit.toFixed(2) : "0,00"} 
                 />
             </div>
         </div>
 
-        {/* GRID DATAS (Sem setas) */}
+        {/* GRID DATAS */}
         <div className="grid grid-cols-2 gap-4">
             <div>
                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1 flex items-center gap-1">
