@@ -35,7 +35,7 @@ export default function Shopping() {
     try {
       // Busca tudo de uma vez para garantir que temos contas/cartões ao abrir o modal
       const [listRes, accRes, cardRes] = await Promise.all([
-        api.get('/shopping-list/'),
+        api.get('/shopping-list/', { params: { _t: new Date().getTime() } }),
         api.get('/accounts/'),
         api.get('/credit-cards/')
       ]);

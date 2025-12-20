@@ -120,7 +120,7 @@ export default function Inventory() {
             <main className="px-4 md:px-8 pb-32 md:pb-10">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {filteredItems.map(item => {
-                        const isLow = parseFloat(item.quantity) <= parseFloat(item.min_quantity);
+                        const isLow = parseFloat(item.quantity) < parseFloat(item.min_quantity);
                         return (
                             <div key={item.id} className={`relative p-4 rounded-2xl border transition-all bg-white dark:bg-[#1E293B] ${isLow ? 'border-rose-300 dark:border-rose-800 ring-1 ring-rose-100 dark:ring-rose-900/20' : 'border-gray-100 dark:border-slate-700'}`}>
                                 

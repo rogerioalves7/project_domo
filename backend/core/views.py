@@ -546,7 +546,7 @@ class ShoppingListViewSet(BaseHouseViewSet):
         house = user.house_member.house
         
         # Gera lista automática baseada em estoque baixo
-        low_stock_items = InventoryItem.objects.filter(house=house, quantity__lte=models.F('min_quantity'))
+        low_stock_items = InventoryItem.objects.filter(house=house, quantity__lt=models.F('min_quantity'))
         for item in low_stock_items:
             ShoppingList.objects.get_or_create(
                 house=house, product=item.product,
@@ -558,7 +558,7 @@ class ShoppingListViewSet(BaseHouseViewSet):
             )
 
         # Remove itens que já estão com estoque saudável
-        healthy_stock_product_ids = InventoryItem.objects.filter(house=house, quantity__gt=models.F('min_quantity')).values_list('product_id', flat=True)
+        healthy_stock_product_ids = InventoryItem.objects.filter(house=house, quantity__gte=models.F('min_quantity')).values_list('product_id', flat=True)
         ShoppingList.objects.filter(house=house, product_id__in=healthy_stock_product_ids, is_purchased=False).delete()
 
         return ShoppingList.objects.filter(house=house).order_by('is_purchased', 'product__name')
