@@ -1,4 +1,5 @@
 import sys
+import re
 from django.shortcuts import get_object_or_404
 from django.db import models, transaction as db_transaction, IntegrityError
 from django.db.models import Q, F, Sum
@@ -260,6 +261,25 @@ class AccountViewSet(BaseHouseViewSet):
             )
         return Account.objects.none()
 
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        data = request.data.copy()
+
+        # Sanitização Robusta (Remove R$, espaços e ajusta pontuação)
+        for field in ['balance', 'limit']:
+            if field in data and isinstance(data[field], str):
+                # Remove tudo que não for dígito, vírgula, ponto ou sinal de menos
+                clean_val = re.sub(r'[^\d,.-]', '', data[field])
+                if ',' in clean_val:
+                    clean_val = clean_val.replace('.', '').replace(',', '.')
+                data[field] = clean_val
+
+        serializer = self.get_serializer(instance, data=data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
 class CreditCardViewSet(BaseHouseViewSet):
     queryset = CreditCard.objects.all()
     serializer_class = CreditCardSerializer
@@ -271,6 +291,24 @@ class CreditCardViewSet(BaseHouseViewSet):
                 Q(is_shared=True) | Q(owner=user)
             )
         return CreditCard.objects.none()
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        data = request.data.copy()
+
+        # Sanitização para Cartões (limit_total e limit_available)
+        for field in ['limit_total', 'limit_available']:
+            if field in data and isinstance(data[field], str):
+                clean_val = re.sub(r'[^\d,.-]', '', data[field])
+                if ',' in clean_val:
+                    clean_val = clean_val.replace('.', '').replace(',', '.')
+                data[field] = clean_val
+
+        serializer = self.get_serializer(instance, data=data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
 
 class InvoiceViewSet(BaseHouseViewSet):
     queryset = Invoice.objects.all()
@@ -545,21 +583,32 @@ class ShoppingListViewSet(BaseHouseViewSet):
         
         house = user.house_member.house
         
-        # Gera lista automática baseada em estoque baixo
+        # 1. Identifica e Atualiza itens com estoque baixo
         low_stock_items = InventoryItem.objects.filter(house=house, quantity__lt=models.F('min_quantity'))
+        low_stock_product_ids = []
+
         for item in low_stock_items:
-            ShoppingList.objects.get_or_create(
+            low_stock_product_ids.append(item.product.id)
+            needed = item.min_quantity - item.quantity
+            if needed <= 0: needed = Decimal('1.00')
+
+            obj, created = ShoppingList.objects.get_or_create(
                 house=house, product=item.product,
                 defaults={
-                    'quantity_to_buy': item.min_quantity, 
+                    'quantity_to_buy': needed, 
                     'real_unit_price': item.product.estimated_price,
-                    'discount_unit_price': item.product.estimated_price
+                    'discount_unit_price': item.product.estimated_price,
+                    'is_purchased': False
                 }
             )
+            # Se já existe e não está no carrinho, atualiza a quantidade necessária
+            if not created and not obj.is_purchased:
+                if obj.quantity_to_buy != needed:
+                    obj.quantity_to_buy = needed
+                    obj.save()
 
-        # Remove itens que já estão com estoque saudável
-        healthy_stock_product_ids = InventoryItem.objects.filter(house=house, quantity__gte=models.F('min_quantity')).values_list('product_id', flat=True)
-        ShoppingList.objects.filter(house=house, product_id__in=healthy_stock_product_ids, is_purchased=False).delete()
+        # 2. Limpeza Robusta: Remove itens não comprados que NÃO estão com estoque baixo
+        ShoppingList.objects.filter(house=house, is_purchased=False).exclude(product_id__in=low_stock_product_ids).delete()
 
         return ShoppingList.objects.filter(house=house).order_by('is_purchased', 'product__name')
 
