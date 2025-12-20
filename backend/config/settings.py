@@ -183,6 +183,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # backend/core/settings.py
 
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 
 
 # --- CONFIGURAÇÃO DE EMAIL (GMAIL) ---
