@@ -181,5 +181,26 @@ AUTHENTICATION_BACKENDS = [
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# --- E-MAIL ---
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+# backend/core/settings.py
+
+
+
+# --- CONFIGURAÇÃO DE EMAIL (GMAIL) ---
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+
+EMAIL_HOST = 'smtp.gmail.com'
+
+EMAIL_PORT = 587
+
+EMAIL_USE_TLS = True
+
+DEFAULT_FROM_EMAIL = 'Domo App <mcroro130@gmail.com>'
+
+
+
+# Credenciais (Idealmente, coloque isso no .env depois)
+
+EMAIL_HOST_USER = 'mcroro130@gmail.com' 
+
+EMAIL_HOST_PASSWORD = 'cshcgfsmoiyexpvq' # Cole sem espaços

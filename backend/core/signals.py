@@ -1,7 +1,7 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.contrib.auth.models import User
-from .models import House, HouseMember
+from .models import House, HouseMember, HouseInvitation
 
 @receiver(post_save, sender=User)
 def create_house_for_new_user(sender, instance, created, **kwargs):
@@ -19,4 +19,39 @@ def create_house_for_new_user(sender, instance, created, **kwargs):
                 role='MASTER'
             )
 
-# ATENÇÃO: As funções update_balance_on_save e update_balance_on_delete FORAM REMOVIDAS.
+@receiver(post_save, sender=HouseInvitation)
+def send_invitation_email(sender, instance, created, **kwargs):
+    """
+    Envia e-mail automático quando um convite é criado.
+    """
+    if created and not instance.accepted:
+        print(f"📩 Preparando envio de convite para {instance.email}...")
+        
+        subject = f"Convite: Junte-se à casa {instance.house.name} no Domo"
+        
+        # Link para o Frontend aceitar o convite
+        # Ajuste o domínio se estiver em produção (ex: https://meudomo.com/accept/...)
+        invite_link = f"http://localhost:5173/accept-invite/{instance.id}"
+        
+        message = f"""
+        Olá!
+        
+        {instance.inviter.first_name} convidou você para participar da gestão financeira da casa "{instance.house.name}".
+        
+        Para aceitar e começar a usar, clique no link abaixo:
+        {invite_link}
+        
+        Se você não possui conta no Domo, será necessário criar uma antes de aceitar.
+        """
+        
+        try:
+            send_mail(
+                subject,
+                message,
+                settings.DEFAULT_FROM_EMAIL,
+                [instance.email],
+                fail_silently=False,
+            )
+            print(f"✅ E-mail enviado com sucesso para {instance.email}")
+        except Exception as e:
+            print(f"❌ Erro ao enviar e-mail: {e}")
