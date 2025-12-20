@@ -260,5 +260,5 @@ class RegistrationTestCase(TestCase):
         # A casa deve ter o nome correto
         self.assertEqual(member.house.name, "Casa de new_admin")
         
-        # O papel DEVE ser ADMIN (Correção crítica que fizemos na View)
-        self.assertEqual(member.role, 'ADMIN')
+        # O papel DEVE ser MASTER (Conforme definido no models.py e signals.py)
+        self.assertEqual(member.role, 'MASTER')

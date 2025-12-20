@@ -16,7 +16,7 @@ def create_house_for_new_user(sender, instance, created, **kwargs):
             HouseMember.objects.create(
                 user=instance,
                 house=house,
-                role='ADMIN'
+                role='MASTER'
             )
 
 # ATENÇÃO: As funções update_balance_on_save e update_balance_on_delete FORAM REMOVIDAS.
