@@ -1023,13 +1023,19 @@ class AuthViewSet(viewsets.ViewSet):
                 'config': config_info
             })
         except Exception as e:
-            # Retorna o erro exato (ConnectionRefused, AuthError, Timeout, etc)
-            return Response({
+        # Montamos o erro
+            error_payload = {
                 'status': '❌ FALHA',
                 'error_type': type(e).__name__,
                 'error_message': str(e),
                 'config': config_info
-            }, status=500)
+            }
+        
+        # 1. Imprime no Terminal do Render (Backup para vermos nos Logs)
+        print(f"\n[DIAGNOSTICO SMTP] Erro capturado: {error_payload}\n")
+
+        # 2. Retorna 200 OK (Truque para exibir o JSON no navegador)
+        return Response(error_payload, status=200)
     
 class CurrentUserView(APIView):
     """
