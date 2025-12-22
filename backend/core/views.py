@@ -812,54 +812,44 @@ class InvitationViewSet(viewsets.ViewSet):
 class RegisterView(generics.CreateAPIView):
     serializer_class = UserSerializer
     permission_classes = [AllowAny]
+    authentication_classes = []  # <--- ADICIONE ISSO: Ignora validação de token
 
-    @db_transaction.atomic  # Garante que se der erro, desfaz tudo (rollback)
+    @db_transaction.atomic
     def post(self, request, *args, **kwargs):
+        # ... (o restante do código permanece igual)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        # 1. Cria o Usuário (O Signal vai rodar aqui e criar a Casa Padrão)
         user = serializer.save()
         
-        # 2. Verifica se existe convite para o e-mail cadastrado
         email = user.email
         pending_invite = HouseInvitation.objects.filter(email=email).first()
 
         if pending_invite:
-            # --- CENÁRIO: USUÁRIO COM CONVITE ---
-            # O usuário já tem um HouseMember criado pelo Signal apontando para uma casa nova.
-            # Vamos atualizar esse registro para apontar para a casa do convite.
-
-            # Opcional: Se quiser limpar a casa "vazia" que o signal criou:
             default_member_record = HouseMember.objects.filter(user=user).first()
             if default_member_record:
                 orphaned_house = default_member_record.house
-                # Se for uma casa recém criada e vazia, deletamos para não sujar o banco
                 if orphaned_house.members.count() <= 1: 
-                    orphaned_house.delete() # Isso geralmente deleta o member junto via CASCADE
+                    orphaned_house.delete()
 
-            # Cria ou Atualiza o vínculo para a Casa do Convite
-            # O update_or_create resolve o erro de "Duplicate Key"
             HouseMember.objects.update_or_create(
                 user=user,
                 defaults={
-                    'house': pending_invite.house, # A casa que convidou
-                    'role': 'MEMBER' # Ou o papel definido no convite
+                    'house': pending_invite.house,
+                    'role': 'MEMBER'
                 }
             )
-
-            # Deleta o convite pois já foi usado
             pending_invite.delete()
-
-        # else:
-            # --- CENÁRIO: USUÁRIO SEM CONVITE ---
-            # O Signal já criou a Casa Nova e vinculou o usuário como MASTER.
-            # Não precisamos fazer nada.
 
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-    
+
 class CustomAuthToken(ObtainAuthToken):
+    # --- ADICIONE ESTAS DUAS LINHAS ---
+    permission_classes = [AllowAny]  # Permite acesso público (qualquer um pode tentar logar)
+    authentication_classes = []      # Ignora tokens inválidos/antigos que o navegador possa enviar
+    # ----------------------------------
+
     def post(self, request, *args, **kwargs):
         serializer = self.serializer_class(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
@@ -869,7 +859,7 @@ class CustomAuthToken(ObtainAuthToken):
             'token': token.key, 'user_id': user.pk,
             'username': user.username, 'email': user.email
         })
-
+    
 class AuthViewSet(viewsets.ViewSet):
     """
     ViewSet para gerenciar ações de conta (Senha e Email)
