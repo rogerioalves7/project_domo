@@ -984,6 +984,53 @@ class AuthViewSet(viewsets.ViewSet):
             return Response({'status': 'E-mail atualizado.'})
         return Response(serializer.errors, status=400)
     
+    @action(detail=False, methods=['get'], permission_classes=[permissions.AllowAny])
+    def test_smtp(self, request):
+        """
+        Rota de Diagnóstico para testar envio de e-mail e exibir o erro na tela.
+        Acesse via GET: /api/auth/test_smtp/
+        """
+        import socket
+        
+        # 1. Teste de DNS (O Render consegue achar o Gmail?)
+        try:
+            server_ip = socket.gethostbyname('smtp.gmail.com')
+            dns_status = f"OK ({server_ip})"
+        except Exception as e:
+            return Response({'step': 'DNS Resolution', 'error': str(e)}, status=500)
+
+        # 2. Teste de Configuração
+        config_info = {
+            'EMAIL_HOST': settings.EMAIL_HOST,
+            'EMAIL_PORT': settings.EMAIL_PORT,
+            'EMAIL_USE_TLS': settings.EMAIL_USE_TLS,
+            'EMAIL_HOST_USER': settings.EMAIL_HOST_USER,
+            'HAS_PASSWORD': bool(settings.EMAIL_HOST_PASSWORD), # Não mostra a senha, só se existe
+        }
+
+        # 3. Tentativa de Envio (Síncrono - Vai mostrar o erro se falhar)
+        try:
+            send_mail(
+                subject='Teste de Diagnóstico Domo (Render)',
+                message='Se você recebeu este e-mail, as configurações SMTP estão corretas!',
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[settings.EMAIL_HOST_USER], # Envia para você mesmo
+                fail_silently=False,
+            )
+            return Response({
+                'status': '✅ SUCESSO! E-mail enviado.',
+                'dns': dns_status,
+                'config': config_info
+            })
+        except Exception as e:
+            # Retorna o erro exato (ConnectionRefused, AuthError, Timeout, etc)
+            return Response({
+                'status': '❌ FALHA',
+                'error_type': type(e).__name__,
+                'error_message': str(e),
+                'config': config_info
+            }, status=500)
+    
 class CurrentUserView(APIView):
     """
     Retorna os dados do usuário logado diretamente do banco de dados.

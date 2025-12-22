@@ -192,9 +192,9 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
 EMAIL_HOST = 'smtp.gmail.com'
 
-EMAIL_PORT = 587
-
-EMAIL_USE_TLS = True
+EMAIL_PORT = 465
+EMAIL_USE_TLS = False  # Desligue o TLS
+EMAIL_USE_SSL = True   # Ligue o SSL
 
 DEFAULT_FROM_EMAIL = 'Domo App <mcroro130@gmail.com>'
 
