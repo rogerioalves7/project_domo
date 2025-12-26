@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import MoneyInput from './MoneyInput';
@@ -8,81 +9,143 @@ import {
 } from 'lucide-react';
 
 export default function NewTransactionForm({ type, accounts, cards, onSuccess, onManageCategories }) {
+  const queryClient = useQueryClient();
+
   const [description, setDescription] = useState('');
   const [value, setValue] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [paymentMethod, setPaymentMethod] = useState(type === 'EXPENSE' ? 'ACCOUNT' : 'ACCOUNT');
   const [selectedPaymentId, setSelectedPaymentId] = useState(''); 
   const [categoryId, setCategoryId] = useState('');
-  const [categories, setCategories] = useState([]);
   const [installments, setInstallments] = useState(1);
   
-  const [loading, setLoading] = useState(false);
+  const { data: categories = [] } = useQuery({
+    queryKey: ['categories'],
+    queryFn: () => api.get('/categories/').then(res => res.data),
+  });
 
   useEffect(() => {
-    api.get('/categories/')
-      .then(res => setCategories(res.data))
-      .catch(err => console.error("Erro ao carregar categorias", err));
-  }, []);
-
-  useEffect(() => {
-    if (paymentMethod === 'ACCOUNT' && accounts.length > 0) {
-        setSelectedPaymentId(accounts[0].id);
-    } else if (paymentMethod === 'CREDIT_CARD' && cards.length > 0) {
-        setSelectedPaymentId(cards[0].id);
-    } else {
-        setSelectedPaymentId('');
+    if (paymentMethod === 'ACCOUNT') {
+       if (accounts.length > 0) setSelectedPaymentId(accounts[0].id);
+       else setSelectedPaymentId('');
+    } else if (paymentMethod === 'CREDIT_CARD') {
+       if (cards.length > 0) setSelectedPaymentId(cards[0].id);
+       else setSelectedPaymentId('');
     }
   }, [paymentMethod, accounts, cards]);
 
+  const mutation = useMutation({
+    mutationFn: (newTransaction) => api.post('/transactions/', newTransaction),
+    
+    // --- NOVO: Configuração de Retry ---
+    // Se o servidor der erro 500 (DNS, Banco fora), tenta 3 vezes antes de desistir.
+    // Se o navegador estiver OFFLINE, nem conta tentativa (fica pausado).
+    retry: 3,
+    retryDelay: 1000, // Espera 1s entre tentativas
+
+    onMutate: async (newTransaction) => {
+      await queryClient.cancelQueries({ queryKey: ['transactions'] });
+      await queryClient.cancelQueries({ queryKey: ['accounts'] });
+      await queryClient.cancelQueries({ queryKey: ['credit-cards'] });
+
+      const previousTransactions = queryClient.getQueryData(['transactions']);
+      const previousAccounts = queryClient.getQueryData(['accounts']);
+      const previousCards = queryClient.getQueryData(['credit-cards']);
+
+      // 1. Atualiza Lista
+      queryClient.setQueryData(['transactions'], (old) => {
+        const optimisticTx = {
+            ...newTransaction,
+            id: 'temp-' + Math.random(),
+            category_name: categories.find(c => c.id == newTransaction.category)?.name || 'Geral',
+            source_name: 'Fila de Envio...', // Feedback visual
+            owner_name: 'Você',
+            created_at: new Date().toISOString()
+        };
+        return [optimisticTx, ...(old || [])];
+      });
+
+      // 2. Atualiza Saldo Conta
+      if (newTransaction.payment_method === 'ACCOUNT' && newTransaction.type === 'EXPENSE') {
+        queryClient.setQueryData(['accounts'], (oldAccounts) => {
+            return oldAccounts?.map(acc => {
+                if (acc.id === newTransaction.account) {
+                    return { ...acc, balance: Number(acc.balance) - Number(newTransaction.value) };
+                }
+                return acc;
+            });
+        });
+      }
+      
+      // 3. Atualiza Cartão
+      if (newTransaction.payment_method === 'CREDIT_CARD' && newTransaction.type === 'EXPENSE') {
+         queryClient.setQueryData(['credit-cards'], (oldCards) => {
+            return oldCards?.map(card => {
+                if (card.id === newTransaction.card) {
+                    return { ...card, limit_available: Number(card.limit_available) - Number(newTransaction.value) };
+                }
+                return card;
+            });
+         });
+      }
+
+      onSuccess(); 
+      toast.success("Salvo! (Sincronizando em 2º plano)");
+
+      return { previousTransactions, previousAccounts, previousCards };
+    },
+
+    onError: (err, newTransaction, context) => {
+      // Só faz rollback se esgotar todas as tentativas (retry: 3)
+      queryClient.setQueryData(['transactions'], context.previousTransactions);
+      queryClient.setQueryData(['accounts'], context.previousAccounts);
+      queryClient.setQueryData(['credit-cards'], context.previousCards);
+      toast.error("Falha definitiva. Tente novamente.");
+    },
+
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      queryClient.invalidateQueries({ queryKey: ['credit-cards'] });
+    },
+  });
+
   async function handleSubmit(e) {
     e.preventDefault();
-    if (loading) return; // Trava cliques extras
-
+    // NÃO travamos mais o clique se estiver "isPending", pois pending agora pode significar "Pausado/Offline"
+    // Travamos apenas se estiver carregando categorias ou algo bloqueante
+    
     if (!description || !value || !selectedPaymentId || !date) {
       toast.error("Preencha todos os campos.");
       return;
     }
 
-    setLoading(true); // Ativa trava
-
-    try {
-      const numericValue = typeof value === 'string' 
+    const numericValue = typeof value === 'string' 
         ? parseFloat(value.replace(/\./g, '').replace(',', '.')) 
         : value;
 
-      const payload = {
+    const payload = {
         description,
         value: numericValue,
         type,
         date,
         category: categoryId || null,
-      };
+    };
 
-      if (paymentMethod === 'CREDIT_CARD' && type === 'EXPENSE') {
+    if (paymentMethod === 'CREDIT_CARD' && type === 'EXPENSE') {
         payload.payment_method = 'CREDIT_CARD';
         payload.card = selectedPaymentId;
         if (installments > 1) payload.installments = installments;
-      } else {
+    } else {
         payload.payment_method = 'ACCOUNT';
         payload.account = selectedPaymentId;
-      }
-
-      await api.post('/transactions/', payload);
-      toast.success("Salvo com sucesso!");
-      onSuccess();
-      // Não damos setLoading(false) aqui porque o componente vai fechar/desmontar
-      
-    } catch (error) {
-      console.error(error);
-      toast.error("Erro ao salvar.");
-      setLoading(false); // Libera apenas se der erro
     }
+
+    mutation.mutate(payload);
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      
       {/* 1. Valor e Descrição */}
       <div className="space-y-3">
         <div>
@@ -98,11 +161,9 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
         </div>
       </div>
 
-      {/* 2. Data e Categoria (CORREÇÃO DE ALINHAMENTO) */}
+      {/* 2. Data e Categoria */}
       <div className="grid grid-cols-2 gap-4">
-        {/* Lado da Data */}
         <div>
-            {/* CORREÇÃO: Altura h-6 forçada para alinhar com o lado direito */}
             <div className="flex justify-between items-center mb-1 h-6">
                 <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">Data</label>
             </div>
@@ -111,10 +172,7 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
                 <input type="date" className="w-full h-full pl-10 pr-4 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white text-sm font-medium" value={date} onChange={e => setDate(e.target.value)} />
             </div>
         </div>
-
-        {/* Lado da Categoria */}
         <div>
-            {/* Altura h-6 já existia aqui por causa do botão */}
             <div className="flex justify-between items-center mb-1 h-6">
                 <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">Categoria</label>
                 <button type="button" onClick={onManageCategories} className="text-[10px] text-teal-600 font-bold hover:underline">Gerenciar</button>
@@ -161,10 +219,11 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
 
       <button 
         type="submit" 
-        disabled={loading} // BOTÃO DESABILITADO
-        className={`w-full font-bold py-3.5 rounded-xl shadow-lg transition-all active:scale-[0.98] flex items-center justify-center gap-2 text-white ${loading ? 'opacity-70 cursor-not-allowed' : ''} ${type === 'EXPENSE' ? 'bg-rose-600 hover:bg-rose-500 shadow-rose-500/20' : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-500/20'}`}
+        // Removemos o 'disabled={loading}' aqui para permitir múltiplos cliques se necessário (ou tratamos na lógica)
+        // Mas o ideal é só mostrar 'Sincronizando' se for a primeira vez
+        className={`w-full font-bold py-3.5 rounded-xl shadow-lg transition-all active:scale-[0.98] flex items-center justify-center gap-2 text-white ${type === 'EXPENSE' ? 'bg-rose-600 hover:bg-rose-500 shadow-rose-500/20' : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-500/20'}`}
       >
-        {loading ? 'Salvando...' : (type === 'EXPENSE' ? 'Confirmar Despesa' : 'Confirmar Receita')}
+        {type === 'EXPENSE' ? 'Confirmar Despesa' : 'Confirmar Receita'}
       </button>
     </form>
   );

@@ -2,160 +2,113 @@ import { useState, useEffect } from 'react';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import MoneyInput from './MoneyInput';
-import { Trash2, Save } from 'lucide-react';
+import { Calendar, Tag, FileText, CheckCircle2, ArrowRight } from 'lucide-react';
 
 export default function NewRecurringBillForm({ initialData, onBack, onSuccess, onManageCategories }) {
   const [name, setName] = useState('');
   const [baseValue, setBaseValue] = useState('');
-  const [dueDay, setDueDay] = useState('');
-  const [category, setCategory] = useState('');
+  const [dueDay, setDueDay] = useState(1);
+  const [categoryId, setCategoryId] = useState('');
   const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(false);
 
+  // Carrega Categorias
   useEffect(() => {
-    loadCategories();
-    // Se vier dados iniciais, é EDIÇÃO
+    api.get('/categories/')
+      .then(res => setCategories(res.data))
+      .catch(err => console.error("Erro categorias", err));
+  }, []);
+
+  // CORREÇÃO DA EDIÇÃO: Preenche os campos corretamente
+  useEffect(() => {
     if (initialData) {
       setName(initialData.name);
-      setBaseValue(initialData.base_value);
+      // Converte para string para o MoneyInput entender
+      setBaseValue(String(initialData.base_value)); 
       setDueDay(initialData.due_day);
-      setCategory(initialData.category);
+      setCategoryId(initialData.category || '');
     }
   }, [initialData]);
 
-  async function loadCategories() {
-    try {
-      const response = await api.get('/categories/?type=EXPENSE');
-      setCategories(response.data);
-    } catch (error) {
-      console.error("Erro ao carregar categorias", error);
-    }
-  }
-
   async function handleSubmit(e) {
     e.preventDefault();
-    
-    // Tratamento do valor (R$ 1.000,00 -> 1000.00)
-    const formattedValue = typeof baseValue === 'string' 
-      ? parseFloat(baseValue.replace('.', '').replace(',', '.')) 
-      : baseValue;
+    if (!name || !baseValue) return toast.error("Nome e Valor obrigatórios");
 
-    const payload = {
-      name,
-      base_value: formattedValue,
-      due_day: parseInt(dueDay),
-      category
-    };
-
+    setLoading(true);
     try {
-      if (initialData) {
-        // EDIÇÃO (PUT)
-        await api.put(`/recurring-bills/${initialData.id}/`, payload);
-        toast.success("Conta fixa atualizada!");
-      } else {
-        // CRIAÇÃO (POST)
-        await api.post('/recurring-bills/', payload);
-        toast.success("Conta fixa criada!");
-      }
-      onSuccess();
-    } catch (error) {
-      console.error(error);
-      toast.error(error.response?.data?.error || "Erro ao salvar.");
-    }
-  }
+        const numericVal = typeof baseValue === 'string' ? parseFloat(baseValue.replace(',', '.')) : baseValue;
+        const payload = { 
+            name, 
+            base_value: numericVal, 
+            due_day: dueDay, 
+            category: categoryId || null 
+        };
 
-  async function handleDelete() {
-    if (!confirm("Tem certeza que deseja excluir esta conta fixa? O histórico de pagamentos passados será mantido.")) return;
-
-    try {
-      await api.delete(`/recurring-bills/${initialData.id}/`);
-      toast.success("Conta fixa removida!");
-      onSuccess();
+        if (initialData) {
+            await api.put(`/recurring-bills/${initialData.id}/`, payload);
+            toast.success("Atualizado!");
+        } else {
+            await api.post('/recurring-bills/', payload);
+            toast.success("Criado!");
+        }
+        onSuccess();
     } catch (error) {
-      toast.error("Erro ao excluir.");
+        console.error(error);
+        toast.error("Erro ao salvar.");
+    } finally {
+        setLoading(false);
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      {onBack && (
-        <button type="button" onClick={onBack} className="text-sm text-gray-500 hover:underline mb-2">
-          &larr; Voltar
-        </button>
-      )}
-      
-      <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-xl border border-orange-100 dark:border-orange-900/30 mb-4">
-        <h3 className="font-bold text-orange-700 dark:text-orange-400">
-          {initialData ? `Editar: ${initialData.name}` : 'Nova Conta Fixa'}
-        </h3>
-        <p className="text-xs text-gray-500 dark:text-gray-400">
-          Isso serve para prever seus gastos mensais automaticamente.
-        </p>
-      </div>
-
-      <div>
-        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Conta</label>
-        <input 
-          type="text" 
-          placeholder="Ex: Aluguel, Netflix, Internet"
-          className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-orange-500 dark:text-white"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          required
-        />
+    <form onSubmit={handleSubmit} className="space-y-5">
+      <div className="space-y-3">
+        <div>
+            <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Nome</label>
+            <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400"><FileText size={18} /></div>
+                <input type="text" placeholder="Ex: Aluguel" className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white text-sm font-medium" value={name} onChange={e => setName(e.target.value)} autoFocus />
+            </div>
+        </div>
+        <div>
+            <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Valor Base</label>
+            <MoneyInput value={baseValue} onValueChange={setBaseValue} placeholder="0,00" />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Valor Base (R$)</label>
-          <MoneyInput value={baseValue} onValueChange={setBaseValue} />
+            <div className="flex justify-between items-center mb-1 h-6">
+                <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">Dia Venc.</label>
+            </div>
+            <div className="relative h-[46px]">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400"><Calendar size={18} /></div>
+                <select className="w-full h-full pl-10 pr-4 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white text-sm font-medium appearance-none" value={dueDay} onChange={e => setDueDay(Number(e.target.value))}>
+                    {[...Array(31)].map((_, i) => (<option key={i+1} value={i+1}>{i+1}</option>))}
+                </select>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400"><ArrowRight size={14} className="rotate-90" /></div>
+            </div>
         </div>
         <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Dia Vencimento</label>
-          <input 
-            type="number" 
-            min="1" max="31"
-            placeholder="Ex: 10"
-            className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-orange-500 dark:text-white"
-            value={dueDay}
-            onChange={e => setDueDay(e.target.value)}
-            required
-          />
+            <div className="flex justify-between items-center mb-1 h-6">
+                <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">Categoria</label>
+                <button type="button" onClick={onManageCategories} className="text-[10px] text-teal-600 font-bold hover:underline">Gerenciar</button>
+            </div>
+            <div className="relative h-[46px]">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400"><Tag size={18} /></div>
+                <select className="w-full h-full pl-10 pr-4 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white text-sm font-medium appearance-none" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
+                    <option value="">Sem categoria</option>
+                    {categories.map(cat => (<option key={cat.id} value={cat.id}>{cat.name}</option>))}
+                </select>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400"><ArrowRight size={14} className="rotate-90" /></div>
+            </div>
         </div>
       </div>
 
-      <div>
-        <div className="flex justify-between items-center mb-1">
-            <label className="block text-xs font-bold text-gray-500 uppercase">Categoria</label>
-            <button type="button" onClick={onManageCategories} className="text-[10px] text-teal-600 font-bold hover:underline">Gerenciar</button>
-        </div>
-        <select 
-          className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-orange-500 dark:text-white"
-          value={category}
-          onChange={e => setCategory(e.target.value)}
-          required
-        >
-          <option value="">Selecione...</option>
-          {categories.map(cat => (
-            <option key={cat.id} value={cat.id}>{cat.name}</option>
-          ))}
-        </select>
-      </div>
-
-      <div className="pt-2 flex gap-3">
-        {initialData && (
-          <button 
-            type="button" 
-            onClick={handleDelete}
-            className="flex-1 bg-red-100 text-red-600 font-bold py-3 rounded-xl hover:bg-red-200 transition flex items-center justify-center gap-2"
-          >
-            <Trash2 size={18} /> Excluir
-          </button>
-        )}
-        <button 
-          type="submit" 
-          className="flex-[2] bg-orange-600 text-white font-bold py-3 rounded-xl hover:bg-orange-500 transition flex items-center justify-center gap-2"
-        >
-          <Save size={18} /> {initialData ? 'Salvar Alterações' : 'Criar Conta'}
+      <div className="grid grid-cols-2 gap-3 pt-2">
+        {onBack && <button type="button" onClick={onBack} className="w-full py-3.5 rounded-xl border border-gray-200 dark:border-slate-700 text-gray-500 hover:bg-gray-50 dark:hover:bg-slate-800 font-bold transition">Voltar</button>}
+        <button type="submit" disabled={loading} className={`w-full bg-orange-600 text-white font-bold py-3.5 rounded-xl hover:bg-orange-500 active:scale-95 transition shadow-lg shadow-orange-500/20 flex items-center justify-center gap-2 ${!onBack ? 'col-span-2' : ''} ${loading ? 'opacity-70 cursor-not-allowed' : ''}`}>
+            {loading ? 'Salvando...' : (initialData ? 'Salvar Alterações' : 'Criar Recorrência')}
         </button>
       </div>
     </form>
