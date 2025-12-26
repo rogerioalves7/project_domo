@@ -12,7 +12,7 @@ import Sidebar from '../components/Sidebar';
 import MoneyInput from '../components/MoneyInput';
 import MobileMenu from '../components/MobileMenu';
 import Skeleton from '../components/Skeleton';
-import { PrivateValue } from '../components/ui/PrivateValue'; // <--- IMPORTADO
+import { PrivateValue } from '../components/ui/PrivateValue';
 import logoImg from '../assets/logo.png';
 import { 
   Plus, ArrowUpCircle, ArrowDownCircle, CreditCard, Wallet, 
@@ -75,10 +75,22 @@ export default function Dashboard() {
       setCurrentUser(userRes.data);
 
       const allTrans = transRes.data;
+      
+      // --- LÓGICA DE FILTRO CORRIGIDA ---
+      const today = new Date();
+      today.setHours(23, 59, 59, 999); // Final do dia de hoje
+
       const recent = allTrans
         .filter(t => {
-            const match = t.description.match(/\((\d+)\/(\d+)\)/);
-            if (match) return match[1] === '1'; 
+            // 1. Converte a data da transação (YYYY-MM-DD) para Objeto Date
+            // Adicionamos T12:00:00 para evitar problemas de fuso horário voltando o dia
+            const tDate = new Date(t.date + 'T12:00:00');
+            
+            // 2. Esconde transações Futuras (ex: parcela do mês que vem)
+            if (tDate > today) return false;
+
+            // 3. (REMOVIDO) O filtro antigo que escondia parcelas 2/3, 3/3 foi deletado.
+            // Agora todas as parcelas passadas ou presentes aparecem.
             return true;
         })
         .sort((a, b) => new Date(b.date) - new Date(a.date))

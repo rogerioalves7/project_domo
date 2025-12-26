@@ -380,7 +380,6 @@ class TransactionViewSet(viewsets.ModelViewSet):
     serializer_class = TransactionSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    # --- MÉTODO CORRIGIDO (INCLUI CARTÕES) ---
     def get_queryset(self):
         user = self.request.user
         
@@ -396,16 +395,16 @@ class TransactionViewSet(viewsets.ModelViewSet):
         return Transaction.objects.filter(
             # SITUAÇÃO A: A transação é MINHA
             Q(account__owner=user) | 
-            Q(invoice__card__owner=user) |  # <--- CORREÇÃO: Pega transações de cartão onde sou dono
+            Q(invoice__card__owner=user) |  
             
-            # SITUAÇÃO B: A transação é DE OUTRO MEMBRO (Compartilhada)
+            # SITUAÇÃO B: A transação é DE OUTRO MEMBRO
             Q(
                 is_shared=True, 
                 account__owner__id__in=allowed_users_ids 
             ) |
             Q(
                 is_shared=True,
-                invoice__card__owner__id__in=allowed_users_ids # <--- CORREÇÃO: Cartões compartilhados
+                invoice__card__owner__id__in=allowed_users_ids 
             )
         ).distinct().order_by('-date', '-created_at')
 
@@ -449,31 +448,71 @@ class TransactionViewSet(viewsets.ModelViewSet):
                     account.balance -= total_value
                     account.save()
 
-                # --- Lógica: DESPESA (CARTÃO DE CRÉDITO) ---
+                # --- Lógica: DESPESA (CARTÃO DE CRÉDITO) - COM CORREÇÃO RETROATIVA ---
                 elif transaction_type == 'EXPENSE' and payment_method == 'CREDIT_CARD':
                     if not card_id: return Response({'error': 'Selecione um cartão.'}, status=status.HTTP_400_BAD_REQUEST)
                     card = CreditCard.objects.get(id=card_id, house=house)
                     
-                    if total_value > card.limit_available:
-                        return Response({'error': 'Limite indisponível.'}, status=status.HTTP_400_BAD_REQUEST)
-                    
-                    card.limit_available -= total_value
-                    card.save()
-
+                    installments = int(data.get('installments', 1))
                     today = datetime.date.today()
+                    
+                    # Definição da Data da Compra
                     tx_date_str = data.get('date')
                     tx_date = datetime.datetime.strptime(tx_date_str, "%Y-%m-%d").date() if tx_date_str else today
+                    
+                    installment_val = total_value / installments
 
-                    ref_date = (tx_date + relativedelta(months=1)).replace(day=1) if tx_date.day >= card.closing_day else tx_date.replace(day=1)
+                    # 1. CÁLCULO DE DEDUÇÃO DO LIMITE
+                    # Iteramos por todas as parcelas para ver quais REALMENTE impactam o limite (Futuras ou Presentes)
+                    amount_to_deduct = Decimal(0)
+                    
+                    for i in range(installments):
+                        # Data base da parcela (compra + i meses)
+                        p_date = tx_date + relativedelta(months=i)
+                        
+                        # Define em qual fatura cai (Mês atual ou Seguinte dependendo do fechamento)
+                        if p_date.day >= card.closing_day:
+                            ref_date = (p_date + relativedelta(months=1)).replace(day=1)
+                        else:
+                            ref_date = p_date.replace(day=1)
+                        
+                        # Data de Vencimento da Fatura
+                        due_date = ref_date.replace(day=card.due_day)
+                        
+                        # LÓGICA DE OURO: Só deduz se o vencimento for HOJE ou FUTURO
+                        # Se já venceu (passado), consideramos que o usuário já pagou e o limite retornou.
+                        if due_date >= today:
+                            amount_to_deduct += installment_val
 
-                    invoice, _ = Invoice.objects.get_or_create(
-                        card=card, reference_date=ref_date,
-                        defaults={'value': 0, 'status': 'OPEN'}
+                    # Validação do Limite
+                    if amount_to_deduct > card.limit_available:
+                        return Response({'error': 'Limite indisponível (considerando parcelas futuras).'}, status=status.HTTP_400_BAD_REQUEST)
+                    
+                    # Atualiza Limite
+                    card.limit_available -= amount_to_deduct
+                    card.save()
+
+                    # 2. GERAÇÃO/ATUALIZAÇÃO DA PRIMEIRA FATURA
+                    if tx_date.day >= card.closing_day:
+                        first_ref = (tx_date + relativedelta(months=1)).replace(day=1)
+                    else:
+                        first_ref = tx_date.replace(day=1)
+                    
+                    first_due = first_ref.replace(day=card.due_day)
+                    
+                    # Se a fatura é antiga, já nasce PAGA para não sujar o dashboard
+                    initial_status = 'PAID' if first_due < today else 'OPEN'
+
+                    invoice, created = Invoice.objects.get_or_create(
+                        card=card, reference_date=first_ref,
+                        defaults={'value': 0, 'status': initial_status}
                     )
                     
-                    installments = int(data.get('installments', 1))
-                    first_installment_value = total_value / installments
-                    invoice.value += first_installment_value
+                    invoice.value += installment_val
+                    # Se é retroativa/paga, ajustamos também o valor pago para zerar pendência visual
+                    if initial_status == 'PAID':
+                        invoice.amount_paid += installment_val
+                    
                     invoice.save()
 
                 # --- Lógica: RECEITA (INCOME) ---
@@ -501,7 +540,8 @@ class TransactionViewSet(viewsets.ModelViewSet):
                     category_id=data.get('category'),
                     account=account,
                     invoice=invoice,
-                    recurring_bill_id=data.get('recurring_bill')
+                    recurring_bill_id=data.get('recurring_bill'),
+                    is_shared=data.get('is_shared', False) # Garante que lemos o booleano do front
                 )
 
                 # 4. Salva os Itens
@@ -516,7 +556,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
                         ))
                     TransactionItem.objects.bulk_create(items_objects)
                 
-                # 5. Gera Parcelas Futuras (Cartão)
+                # 5. Gera Parcelas Futuras (Cartão) - COM A MESMA LÓGICA RETROATIVA
                 if installments > 1 and card and transaction_type == 'EXPENSE':
                     installment_val = total_value / installments
                     new_transactions = []
@@ -526,13 +566,24 @@ class TransactionViewSet(viewsets.ModelViewSet):
                     
                     for i in range(1, installments):
                         future_date = base_date + relativedelta(months=i)
-                        fut_ref = (future_date + relativedelta(months=1)).replace(day=1) if future_date.day >= card.closing_day else future_date.replace(day=1)
+                        
+                        if future_date.day >= card.closing_day:
+                            fut_ref = (future_date + relativedelta(months=1)).replace(day=1)
+                        else:
+                            fut_ref = future_date.replace(day=1)
+                        
+                        fut_due = fut_ref.replace(day=card.due_day)
+                        fut_status = 'PAID' if fut_due < today else 'OPEN'
 
                         fut_invoice, _ = Invoice.objects.get_or_create(
                             card=card, reference_date=fut_ref,
-                            defaults={'value': 0, 'status': 'OPEN'}
+                            defaults={'value': 0, 'status': fut_status}
                         )
+                        
                         fut_invoice.value += installment_val
+                        if fut_status == 'PAID':
+                            fut_invoice.amount_paid += installment_val
+                        
                         fut_invoice.save()
 
                         new_transactions.append(Transaction(
@@ -540,7 +591,8 @@ class TransactionViewSet(viewsets.ModelViewSet):
                             description=f"{data.get('description')} ({i+1}/{installments})",
                             value=installment_val, type='EXPENSE',
                             invoice=fut_invoice, date=future_date,
-                            category_id=data.get('category')
+                            category_id=data.get('category'),
+                            is_shared=data.get('is_shared', False)
                         ))
                     
                     Transaction.objects.bulk_create(new_transactions)
