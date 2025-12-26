@@ -1,13 +1,15 @@
 import { useContext } from 'react';
 import { NavLink } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
+import { usePrivacy } from '../context/PrivacyContext'; // <--- Importação do Contexto
 import logoImg from '../assets/logo.png';
 import { 
-  Home, BarChart3, Box, ShoppingCart, Settings, LogOut 
+  Home, BarChart3, Box, ShoppingCart, Settings, LogOut, Eye, EyeOff 
 } from 'lucide-react';
 
 export default function Sidebar() {
   const { signOut } = useContext(AuthContext);
+  const { isPrivacyEnabled, togglePrivacy } = usePrivacy(); // <--- Uso do Hook
 
   const navItems = [
     { icon: Home, label: 'Início', path: '/app' },
@@ -26,9 +28,6 @@ export default function Sidebar() {
       <div className="h-40 flex items-center justify-center border-b border-gray-100 dark:border-slate-800 shrink-0 p-4">
         
         {/* CONTAINER DO LOGO */}
-        {/* bg-white: Fundo Branco */}
-        {/* border border-gray-200: Borda para separar o branco do branco */}
-        {/* shadow-lg: Sombra para destacar o retângulo */}
         <div className="bg-white dark:bg-white p-6 rounded-[25px] flex items-center justify-center shadow-lg border border-gray-200 dark:border-slate-600 transition-all hover:scale-105">
             <img 
                 src={logoImg} 
@@ -59,8 +58,23 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* FOOTER (Logout) */}
-      <div className="p-4 border-t border-gray-100 dark:border-slate-800 shrink-0">
+      {/* FOOTER (Privacidade e Logout) */}
+      <div className="p-4 border-t border-gray-100 dark:border-slate-800 shrink-0 space-y-2">
+        
+        {/* BOTÃO OLHO MÁGICO (NOVO) */}
+        <button 
+          onClick={togglePrivacy}
+          className="flex items-center w-full px-4 py-3 text-gray-600 hover:bg-gray-100 dark:text-slate-300 dark:hover:bg-slate-800 rounded-xl transition-colors font-medium"
+        >
+          {isPrivacyEnabled ? (
+             <EyeOff size={20} className="mr-3 text-gray-400" />
+          ) : (
+             <Eye size={20} className="mr-3 text-teal-500" />
+          )}
+          {isPrivacyEnabled ? 'Valores Ocultos' : 'Valores Visíveis'}
+        </button>
+
+        {/* BOTÃO SAIR */}
         <button 
           onClick={signOut}
           className="flex items-center w-full px-4 py-3 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/10 rounded-xl transition-colors font-medium"

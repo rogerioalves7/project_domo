@@ -7,6 +7,7 @@ import './index.css'
 import { QueryClient } from '@tanstack/react-query'
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
 import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister'
+import { PrivacyProvider } from './context/PrivacyContext.jsx'
 
 // --- 2. CONFIGURAÇÃO DO CACHE ---
 const queryClient = new QueryClient({
@@ -38,14 +39,16 @@ const persister = createSyncStoragePersister({
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <PersistQueryClientProvider 
-      client={queryClient} 
-      persistOptions={{ 
-        persister, 
-        maxAge: 1000 * 60 * 60 * 24 // Garante que a persistência dure 24h
-      }}
-    >
-      <App />
-    </PersistQueryClientProvider>
+    <PrivacyProvider>
+      <PersistQueryClientProvider 
+        client={queryClient} 
+        persistOptions={{ 
+          persister, 
+          maxAge: 1000 * 60 * 60 * 24 // Garante que a persistência dure 24h
+        }}
+      >
+        <App />
+      </PersistQueryClientProvider>
+    </PrivacyProvider>
   </React.StrictMode>,
 )

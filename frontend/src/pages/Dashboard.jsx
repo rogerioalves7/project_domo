@@ -11,7 +11,8 @@ import CategoryManager from '../components/CategoryManager';
 import Sidebar from '../components/Sidebar';
 import MoneyInput from '../components/MoneyInput';
 import MobileMenu from '../components/MobileMenu';
-import Skeleton from '../components/Skeleton'; // <--- IMPORTANTE: Importe o Skeleton
+import Skeleton from '../components/Skeleton';
+import { PrivateValue } from '../components/ui/PrivateValue'; // <--- IMPORTADO
 import logoImg from '../assets/logo.png';
 import { 
   Plus, ArrowUpCircle, ArrowDownCircle, CreditCard, Wallet, 
@@ -60,9 +61,6 @@ export default function Dashboard() {
   async function loadDashboardData() {
     setLoading(true);
     try {
-      // Adicionamos um pequeno delay artificial (300ms) se quiser ver o Skeleton piscando
-      // await new Promise(r => setTimeout(r, 500)); 
-
       const [accRes, cardRes, billRes, transRes, userRes] = await Promise.all([
         api.get('/accounts/'),
         api.get('/credit-cards/'),
@@ -231,12 +229,16 @@ export default function Dashboard() {
                             {loading ? (
                                 <Skeleton className="h-12 w-64 bg-teal-400/30 dark:bg-teal-800/30 my-2" />
                             ) : (
-                                <p className="text-4xl font-bold tracking-tight">R$ {totalBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                <p className="text-4xl font-bold tracking-tight">
+                                   <PrivateValue>R$ {totalBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                                </p>
                             )}
                             {loading ? (
                                 <Skeleton className="h-6 w-48 bg-teal-400/30 dark:bg-teal-800/30 mt-2" />
                             ) : (
-                                <p className="text-xs text-teal-200 mt-2 bg-teal-800/30 px-2 py-1 rounded inline-block">Saldo Livre Est.: R$ {freeBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                <p className="text-xs text-teal-200 mt-2 bg-teal-800/30 px-2 py-1 rounded inline-block">
+                                    Saldo Livre Est.: <PrivateValue>R$ {freeBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                                </p>
                             )}
                         </div>
                         <div className="hidden sm:block bg-white/20 p-3 rounded-2xl backdrop-blur-sm z-10"><Wallet className="w-8 h-8 text-white" /></div>
@@ -254,7 +256,9 @@ export default function Dashboard() {
                                 </div>
                             ) : (
                                 <>
-                                    <p className="text-2xl font-bold text-rose-500">R$ {totalForecast.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                    <p className="text-2xl font-bold text-rose-500">
+                                        <PrivateValue>R$ {totalForecast.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                                    </p>
                                     <p className="text-[10px] text-gray-400 mt-1">Faturas ({cards.length}) + Pendentes ({recurringBills.filter(b => !b.is_paid_this_month).length})</p>
                                 </>
                             )}
@@ -306,7 +310,9 @@ export default function Dashboard() {
                                                 </div>
                                             </div>
                                         </div>
-                                        <span className="font-bold text-gray-800 dark:text-gray-200">R$ {Number(acc.balance).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                        <span className="font-bold text-gray-800 dark:text-gray-200">
+                                            <PrivateValue>R$ {Number(acc.balance).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                                        </span>
                                     </div>
                                 ))
                             )}
@@ -355,7 +361,12 @@ export default function Dashboard() {
                                                         <button onClick={(e) => handleToggleCardPrivacy(e, card)} className={`p-1 rounded-md transition-colors ${card.is_shared ? 'text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-700'}`} title={card.is_shared ? "Compartilhado" : "Privado"}>{card.is_shared ? <Users size={12} /> : <Lock size={12} />}</button>
                                                         {Number(invoiceVal) > 0 ? (
                                                             <div className="flex items-center gap-2">
-                                                                <div className="flex flex-col leading-tight"><p className={`text-[10px] font-bold ${statusColor}`}>{invoiceStatus}: R$ {Number(invoiceVal).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p><p className="text-[9px] text-gray-400 font-medium">Vence dia {card.due_day}</p></div>
+                                                                <div className="flex flex-col leading-tight">
+                                                                    <p className={`text-[10px] font-bold ${statusColor}`}>
+                                                                        {invoiceStatus}: <PrivateValue>R$ {Number(invoiceVal).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                                                                    </p>
+                                                                    <p className="text-[9px] text-gray-400 font-medium">Vence dia {card.due_day}</p>
+                                                                </div>
                                                                 <button onClick={(e) => { e.stopPropagation(); handleOpenPayInvoice(card); }} className="ml-1 px-2 py-0.5 bg-rose-600 text-white text-[10px] font-bold rounded hover:bg-rose-700 transition active:scale-95 shadow-sm">Pagar</button>
                                                             </div>
                                                         ) : (
@@ -364,7 +375,13 @@ export default function Dashboard() {
                                                     </div>
                                                 </div>
                                             </div>
-                                            <div className="text-right min-w-[80px]"><span className="font-bold text-gray-800 dark:text-gray-200 block text-sm">R$ {avail.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span><span className="text-[10px] text-gray-400">Disp.</span><div className="w-full h-1 bg-gray-100 dark:bg-slate-700 rounded-full mt-1 overflow-hidden"><div className="h-full bg-gradient-to-r from-purple-400 to-blue-500" style={{ width: `${percentage}%` }} /></div></div>
+                                            <div className="text-right min-w-[80px]">
+                                                <span className="font-bold text-gray-800 dark:text-gray-200 block text-sm">
+                                                    <PrivateValue>R$ {avail.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                                                </span>
+                                                <span className="text-[10px] text-gray-400">Disp.</span>
+                                                <div className="w-full h-1 bg-gray-100 dark:bg-slate-700 rounded-full mt-1 overflow-hidden"><div className="h-full bg-gradient-to-r from-purple-400 to-blue-500" style={{ width: `${percentage}%` }} /></div>
+                                            </div>
                                         </div>
                                     );
                                 })
@@ -403,7 +420,9 @@ export default function Dashboard() {
                                             <div className="p-2 rounded-lg bg-orange-50 dark:bg-orange-900/20 text-orange-600"><Calendar size={16}/></div>
                                             <div>
                                                 <p className="font-bold text-sm text-gray-800 dark:text-gray-200 flex items-center gap-1">{bill.name}{bill.is_paid_this_month && <CheckCircle2 size={12} className="text-emerald-500"/>}</p>
-                                                <p className="text-xs text-gray-500">{bill.category_name || 'Geral'} • Dia {bill.due_day} • R$ {Number(bill.base_value).toLocaleString('pt-BR')}</p>
+                                                <p className="text-xs text-gray-500">
+                                                    {bill.category_name || 'Geral'} • Dia {bill.due_day} • <PrivateValue>R$ {Number(bill.base_value).toLocaleString('pt-BR')}</PrivateValue>
+                                                </p>
                                             </div>
                                         </div>
                                         {!bill.is_paid_this_month ? (<button onClick={(e) => { e.stopPropagation(); handleOpenPayModal(bill); }} className="px-3 py-1 bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-gray-300 text-[10px] font-bold rounded-lg hover:bg-emerald-500 hover:text-white transition">Pagar</button>) : (<span className="text-[10px] font-bold text-emerald-500 px-2 border border-emerald-100 rounded bg-emerald-50">Pago</span>)}
@@ -450,7 +469,9 @@ export default function Dashboard() {
                                                         <div className="flex items-center gap-2 mt-0.5"><p className="text-xs text-gray-500">{new Date(t.date + 'T12:00:00').toLocaleDateString('pt-BR')} • {t.category_name || 'Geral'}</p>{hasItems && (<span className="flex items-center gap-1 text-[9px] font-bold bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300 px-1.5 py-0.5 rounded border border-indigo-100 dark:border-indigo-800/50"><ShoppingBag size={10} /> {t.items.length} itens</span>)}</div>
                                                     </div>
                                                 </div>
-                                                <span className={`font-bold text-sm ${isExpense ? 'text-rose-600' : 'text-emerald-600'}`}>{isExpense ? '- ' : '+ '} R$ {Number(t.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                                <span className={`font-bold text-sm ${isExpense ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                                    {isExpense ? '- ' : '+ '} <PrivateValue>R$ {Number(t.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                                                </span>
                                             </div>
                                         );
                                     })
@@ -476,17 +497,68 @@ export default function Dashboard() {
         {modalView === 'VIEW_TRANSACTION' && viewTransaction && (
             <div className="space-y-4">
                 <div className="bg-gray-50 dark:bg-slate-900 p-4 rounded-xl border border-gray-100 dark:border-slate-700 flex justify-between items-start">
-                    <div><p className="text-xs font-bold text-gray-400 uppercase">Total</p><p className="text-2xl font-bold text-gray-800 dark:text-white">R$ {Number(viewTransaction.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p><p className="text-sm text-gray-500 mt-1">{viewTransaction.description}</p></div>
+                    <div>
+                        <p className="text-xs font-bold text-gray-400 uppercase">Total</p>
+                        <p className="text-2xl font-bold text-gray-800 dark:text-white">
+                            <PrivateValue>R$ {Number(viewTransaction.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                        </p>
+                        <p className="text-sm text-gray-500 mt-1">{viewTransaction.description}</p>
+                    </div>
                     <div className="text-right"><p className="text-xs text-gray-400">{new Date(viewTransaction.date).toLocaleDateString('pt-BR')}</p></div>
                 </div>
-                <div><h4 className="text-xs font-bold text-gray-500 uppercase mb-2 ml-1">Itens da Lista</h4><div className="space-y-2 max-h-60 overflow-y-auto pr-1">{viewTransaction.items.map((item, idx) => (<div key={idx} className="flex justify-between items-center p-3 bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-lg"><span className="text-sm text-gray-700 dark:text-gray-300">{item.quantity > 1 && <span className="font-bold mr-1">{Number(item.quantity).toString().replace('.',',')}x</span>}{item.description}</span><span className="font-bold text-sm text-gray-800 dark:text-white">R$ {Number(item.value).toFixed(2)}</span></div>))}</div></div>
+                <div>
+                    <h4 className="text-xs font-bold text-gray-500 uppercase mb-2 ml-1">Itens da Lista</h4>
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                        {viewTransaction.items.map((item, idx) => (
+                            <div key={idx} className="flex justify-between items-center p-3 bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-lg">
+                                <span className="text-sm text-gray-700 dark:text-gray-300">{item.quantity > 1 && <span className="font-bold mr-1">{Number(item.quantity).toString().replace('.',',')}x</span>}{item.description}</span>
+                                <span className="font-bold text-sm text-gray-800 dark:text-white">
+                                    <PrivateValue>R$ {Number(item.value).toFixed(2)}</PrivateValue>
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
             </div>
         )}
         {modalView === 'FORECAST_DETAILS' && (
             <div className="space-y-6">
-                <div className="bg-rose-50 dark:bg-rose-900/10 p-4 rounded-xl border border-rose-100 dark:border-rose-900/30 text-center"><p className="text-sm text-rose-500 mb-1 font-bold">Total Previsto</p><p className="text-3xl font-bold text-gray-800 dark:text-white">R$ {totalForecast.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p></div>
-                <div><h4 className="text-xs font-bold text-gray-500 uppercase mb-2 ml-1 flex items-center gap-1"><CreditCard size={12}/> Faturas de Cartão</h4>{cards.filter(c => Number(c.invoice_info?.value) > 0).length === 0 ? (<p className="text-sm text-gray-400 italic ml-1">Nenhuma fatura com valor.</p>) : (<div className="space-y-2">{cards.filter(c => Number(c.invoice_info?.value) > 0).map(card => (<div key={card.id} className="flex justify-between items-center p-3 bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-lg"><span className="text-sm font-medium text-gray-700 dark:text-gray-300">{card.name}</span><span className="font-bold text-sm text-rose-500">R$ {Number(card.invoice_info.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>))}</div>)}</div>
-                <div><h4 className="text-xs font-bold text-gray-500 uppercase mb-2 ml-1 flex items-center gap-1"><Calendar size={12}/> Contas Fixas Pendentes</h4>{recurringBills.filter(b => !b.is_paid_this_month).length === 0 ? (<p className="text-sm text-gray-400 italic ml-1">Tudo pago por aqui!</p>) : (<div className="space-y-2">{recurringBills.filter(b => !b.is_paid_this_month).map(bill => (<div key={bill.id} className="flex justify-between items-center p-3 bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-lg"><span className="text-sm font-medium text-gray-700 dark:text-gray-300">{bill.name}</span><span className="font-bold text-sm text-gray-600 dark:text-gray-400">R$ {Number(bill.base_value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>))}</div>)}</div>
+                <div className="bg-rose-50 dark:bg-rose-900/10 p-4 rounded-xl border border-rose-100 dark:border-rose-900/30 text-center">
+                    <p className="text-sm text-rose-500 mb-1 font-bold">Total Previsto</p>
+                    <p className="text-3xl font-bold text-gray-800 dark:text-white">
+                        <PrivateValue>R$ {totalForecast.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                    </p>
+                </div>
+                <div>
+                    <h4 className="text-xs font-bold text-gray-500 uppercase mb-2 ml-1 flex items-center gap-1"><CreditCard size={12}/> Faturas de Cartão</h4>
+                    {cards.filter(c => Number(c.invoice_info?.value) > 0).length === 0 ? (<p className="text-sm text-gray-400 italic ml-1">Nenhuma fatura com valor.</p>) : (
+                        <div className="space-y-2">
+                            {cards.filter(c => Number(c.invoice_info?.value) > 0).map(card => (
+                                <div key={card.id} className="flex justify-between items-center p-3 bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-lg">
+                                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{card.name}</span>
+                                    <span className="font-bold text-sm text-rose-500">
+                                        <PrivateValue>R$ {Number(card.invoice_info.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+                <div>
+                    <h4 className="text-xs font-bold text-gray-500 uppercase mb-2 ml-1 flex items-center gap-1"><Calendar size={12}/> Contas Fixas Pendentes</h4>
+                    {recurringBills.filter(b => !b.is_paid_this_month).length === 0 ? (<p className="text-sm text-gray-400 italic ml-1">Tudo pago por aqui!</p>) : (
+                        <div className="space-y-2">
+                            {recurringBills.filter(b => !b.is_paid_this_month).map(bill => (
+                                <div key={bill.id} className="flex justify-between items-center p-3 bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-lg">
+                                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{bill.name}</span>
+                                    <span className="font-bold text-sm text-gray-600 dark:text-gray-400">
+                                        <PrivateValue>R$ {Number(bill.base_value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue>
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
             </div>
         )}
         {modalView === 'PAY_BILL' && billToPay && (<form onSubmit={confirmPayment} className="space-y-4"><div className="bg-gray-50 dark:bg-slate-900 p-4 rounded-xl border border-gray-100 dark:border-slate-700"><p className="text-sm text-gray-500 dark:text-gray-400">Pagando:</p><p className="font-bold text-lg text-gray-800 dark:text-white">{billToPay.name}</p></div><div><label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Valor</label><MoneyInput value={paymentValue} onValueChange={setPaymentValue} /></div><div><label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Conta para débito</label><div className="relative"><select className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 text-gray-800 dark:text-white outline-none focus:ring-2 focus:ring-teal-500 appearance-none" value={paymentAccount} onChange={e => setPaymentAccount(e.target.value)} required>{accounts.map(acc => (<option key={acc.id} value={acc.id}>{acc.name} (R$ {Number(acc.balance).toLocaleString('pt-BR', { minimumFractionDigits: 2 })})</option>))}</select><div className="absolute right-3 top-3.5 pointer-events-none text-gray-400"><ArrowDownCircle size={16} /></div></div></div><button type="submit" className="w-full bg-teal-600 text-white font-bold py-3 rounded-xl hover:bg-teal-500 active:scale-95 transition shadow-lg shadow-teal-500/20">Confirmar Pagamento</button></form>)}

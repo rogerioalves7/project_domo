@@ -1,7 +1,8 @@
 # 📋 Backlog do Projeto Domo
 
 ## 🔴 Prioridade 0: Correções Críticas (Deploy & Produção)
-- [ ] **Fix Backend Signal:** Corrigir `NameError: name 'settings' is not defined` no ficheiro `backend/core/signals.py` (Adicionar `from django.conf import settings` no topo).
+- [X] **Fix Backend Signal:** Corrigir `NameError: name 'settings' is not defined` no ficheiro `backend/core/signals.py` (Adicionar `from django.conf import settings` no topo).
+- [ ] ***Fix E-mail Sending:*** Corrigir o problema de envio do e-mail em produção.
 - [ ] **Fix Environment Variable:** Investigar por que `FRONTEND_URL` não está a ser lido corretamente no Render (Link do convite a sair como `localhost`).
 - [ ] **Validate SMTP:** Confirmar se a Senha de Aplicação do Gmail está a autenticar corretamente no ambiente de produção.
 
