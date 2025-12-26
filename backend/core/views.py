@@ -380,14 +380,14 @@ class TransactionViewSet(viewsets.ModelViewSet):
     serializer_class = TransactionSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    # --- MÉTODO CORRIGIDO (INCLUI CARTÕES) ---
     def get_queryset(self):
         user = self.request.user
         
         # 1. Descubro quais casas EU participo
         my_house_ids = HouseMember.objects.filter(user=user).values_list('house_id', flat=True)
 
-        # 2. Crio uma lista de "Pessoas Permitidas" (Meus vizinhos de casa)
-        # Se eu moro na casa X, posso ver transações COMPARTILHADAS de quem também mora na casa X.
+        # 2. Lista de vizinhos (quem mora comigo)
         allowed_users_ids = HouseMember.objects.filter(
             house_id__in=my_house_ids
         ).values_list('user_id', flat=True)
@@ -395,14 +395,17 @@ class TransactionViewSet(viewsets.ModelViewSet):
         # 3. O Filtro Definitivo
         return Transaction.objects.filter(
             # SITUAÇÃO A: A transação é MINHA
-            # Se eu sou o dono, vejo tudo (privado, público, secreto...)
             Q(account__owner=user) | 
+            Q(invoice__card__owner=user) |  # <--- CORREÇÃO: Pega transações de cartão onde sou dono
             
-            # SITUAÇÃO B: A transação é DE OUTRO MEMBRO
-            # Aqui aplicamos a sua regra estrita:
+            # SITUAÇÃO B: A transação é DE OUTRO MEMBRO (Compartilhada)
             Q(
-                is_shared=True,  # <--- O CADEADO: Só passa se foi marcada como pública na hora da compra
-                account__owner__id__in=allowed_users_ids # <--- E o dono da conta mora comigo
+                is_shared=True, 
+                account__owner__id__in=allowed_users_ids 
+            ) |
+            Q(
+                is_shared=True,
+                invoice__card__owner__id__in=allowed_users_ids # <--- CORREÇÃO: Cartões compartilhados
             )
         ).distinct().order_by('-date', '-created_at')
 
