@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import MoneyInput from './MoneyInput';
 import { 
   Calendar, Tag, FileText, Wallet, CreditCard, 
-  ArrowRight, CheckCircle2, AlertCircle 
+  ArrowRight, CheckCircle2, AlertCircle, Hash 
 } from 'lucide-react';
 
 export default function NewTransactionForm({ type, accounts, cards, onSuccess, onManageCategories }) {
@@ -37,20 +37,20 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
     if (cards.length > 0 && !selectedCard) setSelectedCard(cards[0].id);
   }, [accounts, cards]);
 
-  // 3. Filtra as categorias pelo Tipo da Transação (O pulo do gato)
+  // 3. Filtra as categorias pelo Tipo da Transação
   const filteredCategories = categories.filter(cat => cat.type === type);
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (!description || !value) return toast.error("Descrição e Valor são obrigatórios");
     
-    // Validação extra para método de pagamento
     if (paymentMethod === 'ACCOUNT' && !selectedAccount) return toast.error("Selecione uma conta.");
     if (paymentMethod === 'CREDIT_CARD' && !selectedCard) return toast.error("Selecione um cartão.");
 
     setLoading(true);
     try {
         const numericVal = typeof value === 'string' ? parseFloat(value.replace(',', '.')) : value;
+        const finalInstallments = paymentMethod === 'CREDIT_CARD' ? (parseInt(installments) || 1) : 1;
         
         const payload = {
             description,
@@ -59,7 +59,7 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
             date: date,
             category: categoryId || null,
             payment_method: paymentMethod,
-            installments: paymentMethod === 'CREDIT_CARD' ? installments : 1
+            installments: finalInstallments
         };
 
         if (paymentMethod === 'ACCOUNT') {
@@ -70,7 +70,7 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
 
         await api.post('/transactions/', payload);
         toast.success(type === 'EXPENSE' ? "Despesa lançada!" : "Receita lançada!");
-        onSuccess(); // Fecha modal e atualiza dashboard
+        onSuccess(); 
     } catch (error) {
         console.error(error);
         const msg = error.response?.data?.error || "Erro ao salvar transação.";
@@ -116,35 +116,40 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
         </div>
 
         <div className="grid grid-cols-2 gap-4">
+            {/* COLUNA DATA */}
             <div>
-                <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">Data</label>
+                {/* Altura fixa (h-5) na label para alinhar com a coluna da direita que tem botão */}
+                <div className="flex items-center mb-1 h-5">
+                    <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">Data</label>
+                </div>
                 <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400"><Calendar size={18} /></div>
                     <input 
                         type="date" 
-                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white text-sm font-medium appearance-none" 
+                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white text-sm font-medium appearance-none h-[46px]" 
                         value={date} 
                         onChange={e => setDate(e.target.value)} 
                     />
                 </div>
             </div>
             
-            {/* SELETOR DE CATEGORIA */}
+            {/* COLUNA CATEGORIA */}
             <div>
-                <div className="flex justify-between items-center mb-1">
+                {/* Altura fixa (h-5) na label para garantir alinhamento perfeito */}
+                <div className="flex justify-between items-center mb-1 h-5">
                     <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">Categoria</label>
                     <button type="button" onClick={onManageCategories} className="text-[10px] text-teal-600 font-bold hover:underline">Gerenciar</button>
                 </div>
                 <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400"><Tag size={18} /></div>
                     <select 
-                        className="w-full pl-10 pr-8 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white text-sm font-medium appearance-none" 
+                        className="w-full pl-10 pr-8 py-3 rounded-xl bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-teal-500 dark:text-white text-sm font-medium appearance-none h-[46px]" 
                         value={categoryId} 
                         onChange={e => setCategoryId(e.target.value)}
                     >
                         <option value="">Sem categoria</option>
                         {filteredCategories.length === 0 && (
-                            <option disabled>Nenhuma categoria de {isExpense ? 'Despesa' : 'Receita'}</option>
+                            <option disabled>Nenhuma categoria disponível</option>
                         )}
                         {filteredCategories.map(cat => (
                             <option key={cat.id} value={cat.id}>{cat.name}</option>
@@ -193,31 +198,35 @@ export default function NewTransactionForm({ type, accounts, cards, onSuccess, o
                     <div className="absolute right-3 top-3.5 pointer-events-none text-gray-400"><ArrowRight size={14} className="rotate-90" /></div>
                 </div>
             ) : (
-                <div className="space-y-3">
-                    <div className="relative">
+                <div className="grid grid-cols-3 gap-3">
+                    <div className="col-span-2 relative">
                         <select 
                             className="w-full p-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-purple-500 appearance-none text-sm"
                             value={selectedCard}
                             onChange={e => setSelectedCard(e.target.value)}
                         >
-                            {cards.length === 0 && <option>Nenhum cartão cadastrado</option>}
+                            {cards.length === 0 && <option>Nenhum cartão</option>}
                             {cards.map(c => (
                                 <option key={c.id} value={c.id}>{c.name} (Disp: R$ {Number(c.limit_available).toFixed(2)})</option>
                             ))}
                         </select>
                         <div className="absolute right-3 top-3.5 pointer-events-none text-gray-400"><ArrowRight size={14} className="rotate-90" /></div>
                     </div>
-                    <div className="flex items-center gap-3">
-                        <label className="text-xs font-bold text-gray-500 whitespace-nowrap">Parcelas:</label>
-                        <select 
-                            className="flex-1 p-2 rounded-lg bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none text-sm"
+                    
+                    {/* INPUT NUMÉRICO PARA PARCELAS */}
+                    <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                            <span className="text-xs font-bold">x</span>
+                        </div>
+                        <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            className="w-full pl-7 pr-2 py-3 rounded-xl bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 outline-none focus:ring-2 focus:ring-purple-500 text-sm font-medium text-center"
+                            placeholder="1"
                             value={installments}
-                            onChange={e => setInstallments(Number(e.target.value))}
-                        >
-                            {[...Array(12)].map((_, i) => (
-                                <option key={i+1} value={i+1}>{i+1}x {i > 0 && '(Sem juros)'}</option>
-                            ))}
-                        </select>
+                            onChange={e => setInstallments(Math.max(1, parseInt(e.target.value) || ''))}
+                        />
                     </div>
                 </div>
             )}
