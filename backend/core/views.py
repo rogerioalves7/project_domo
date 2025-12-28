@@ -47,28 +47,29 @@ class CustomTokenGenerator(PasswordResetTokenGenerator):
 
 custom_token_generator = CustomTokenGenerator()
 
-# --- FUNÇÕES AUXILIARES DE DATA (CRUCIAL PARA O PASSO 2) ---
+# --- FUNÇÕES AUXILIARES ---
 
 def get_invoice_ref_date(transaction_date, closing_day):
-    """
-    Calcula a data de referência (mês/ano) da fatura com base na data da compra.
-    Retorna sempre o dia 1 do mês de competência da fatura.
-    """
+    """Retorna o dia 1 do mês da fatura (considerando dia de fechamento)"""
     if transaction_date.day >= closing_day:
-        # Se comprou depois do fechamento, vai para o próximo mês
         next_month = transaction_date + relativedelta(months=1)
         return next_month.replace(day=1)
     else:
-        # Se comprou antes, fica no mês atual da compra
         return transaction_date.replace(day=1)
 
 def safe_due_date(reference_date, due_day):
-    """
-    Garante que o dia de vencimento exista no mês (ex: dia 30 em Fevereiro).
-    """
+    """Garante data de vencimento válida (ex: evita 30 de fevereiro)"""
     last_day = calendar.monthrange(reference_date.year, reference_date.month)[1]
     safe_day = min(due_day, last_day)
     return reference_date.replace(day=safe_day)
+
+def to_decimal(value):
+    """Converte com segurança qualquer valor para Decimal"""
+    if value is None: return Decimal('0.00')
+    try:
+        return Decimal(str(value))
+    except:
+        return Decimal('0.00')
 
 # ======================================================================
 # VIEWSETS BASE
@@ -318,7 +319,7 @@ class InvoiceViewSet(BaseHouseViewSet):
         try:
             invoice = self.get_object()
             account_id = request.data.get('account_id')
-            payment_value = Decimal(str(request.data.get('value')))
+            payment_value = to_decimal(request.data.get('value')) # Decimal Seguro
             date_payment = request.data.get('date', datetime.date.today())
 
             account = Account.objects.get(id=account_id, house=invoice.card.house)
@@ -330,23 +331,26 @@ class InvoiceViewSet(BaseHouseViewSet):
                 account=account, date=date_payment, category=None 
             )
 
-            # Lógica de pagamento
-            invoice.amount_paid += payment_value
+            # Lógica de pagamento (Decimal Seguro)
+            invoice.amount_paid = to_decimal(invoice.amount_paid) + payment_value
+            invoice.value = to_decimal(invoice.value)
+            
             if invoice.amount_paid >= invoice.value:
                 invoice.status = 'PAID'
             invoice.save()
 
-            # Libera limite
-            current_available = invoice.card.limit_available
-            max_limit = invoice.card.limit_total
+            # Libera limite (Decimal Seguro)
+            current_available = to_decimal(invoice.card.limit_available)
+            max_limit = to_decimal(invoice.card.limit_total)
+            
             new_available = current_available + payment_value
             if new_available > max_limit: new_available = max_limit
             
             invoice.card.limit_available = new_available
             invoice.card.save()
             
-            # Debita da conta
-            account.balance -= payment_value
+            # Debita da conta (Decimal Seguro)
+            account.balance = to_decimal(account.balance) - payment_value
             account.save()
 
             return Response({'message': 'Fatura paga com sucesso'}, status=status.HTTP_200_OK)
@@ -408,8 +412,8 @@ class TransactionViewSet(viewsets.ModelViewSet):
             card_id = account_id
             account_id = None
 
-        raw_value = data.get('value')
         try:
+            raw_value = data.get('value')
             if isinstance(raw_value, str):
                 raw_value = raw_value.replace(',', '.')
             total_value = Decimal(str(raw_value))
@@ -426,9 +430,14 @@ class TransactionViewSet(viewsets.ModelViewSet):
                 if transaction_type == 'EXPENSE' and payment_method == 'ACCOUNT':
                     if not account_id: return Response({'error': 'Selecione uma conta.'}, status=status.HTTP_400_BAD_REQUEST)
                     account = Account.objects.get(id=account_id, house=house)
-                    if total_value > (account.balance + account.limit):
+                    
+                    current_balance = to_decimal(account.balance)
+                    current_limit = to_decimal(account.limit)
+                    
+                    if total_value > (current_balance + current_limit):
                         return Response({'error': f'Saldo insuficiente.'}, status=status.HTTP_400_BAD_REQUEST)
-                    account.balance -= total_value
+                    
+                    account.balance = current_balance - total_value
                     account.save()
 
                 # --- DESPESA (CARTÃO) ---
@@ -439,43 +448,30 @@ class TransactionViewSet(viewsets.ModelViewSet):
                     installments = int(data.get('installments', 1))
                     today = datetime.date.today()
                     
-                    # Data da Transação (Pode ser retroativa)
                     tx_date_str = data.get('date')
                     tx_date = datetime.datetime.strptime(tx_date_str, "%Y-%m-%d").date() if tx_date_str else today
                     
                     installment_val = total_value / installments
 
-                    # 1. Dedução de Limite (Considera datas futuras se necessário)
+                    # 1. Dedução de Limite
                     amount_to_deduct = Decimal(0)
                     for i in range(installments):
-                        # Calcula a data base da parcela
                         parcel_date = tx_date + relativedelta(months=i)
-                        
-                        # Descobre de qual mês é essa fatura
                         ref_date = get_invoice_ref_date(parcel_date, card.closing_day)
-                        
-                        # Calcula vencimento seguro
                         due_date = safe_due_date(ref_date, card.due_day)
                         
-                        # Só deduz do limite se a fatura ainda vai vencer ou venceu hoje
                         if due_date >= today:
                             amount_to_deduct += installment_val
 
-                    if amount_to_deduct > card.limit_available:
+                    current_limit_avail = to_decimal(card.limit_available)
+                    if amount_to_deduct > current_limit_avail:
                         return Response({'error': 'Limite indisponível.'}, status=status.HTTP_400_BAD_REQUEST)
                     
-                    card.limit_available -= amount_to_deduct
+                    card.limit_available = current_limit_avail - amount_to_deduct
                     card.save()
 
-                    # 2. Gera/Atualiza Fatura da Primeira Parcela
-                    # (Aqui aplicamos a lógica retroativa correta)
+                    # 2. Gera/Atualiza Fatura
                     first_ref = get_invoice_ref_date(tx_date, card.closing_day)
-                    
-                    # Status inicial: Se o vencimento dessa fatura já passou, ela pode nascer PAGA (se for muito antiga)
-                    # ou ABERTA/FECHADA dependendo do contexto. Vamos manter 'OPEN' se não for paga explicitamente.
-                    # Mas se o usuário está criando algo de 2 anos atrás, assume-se pago? 
-                    # Por segurança, criamos 'OPEN' e deixamos o usuário pagar, ou 'PAID' se due_date < today
-                    
                     first_due = safe_due_date(first_ref, card.due_day)
                     initial_status = 'PAID' if first_due < today else 'OPEN'
 
@@ -484,16 +480,18 @@ class TransactionViewSet(viewsets.ModelViewSet):
                         defaults={'value': 0, 'status': initial_status}
                     )
                     
-                    invoice.value += installment_val
+                    invoice.value = to_decimal(invoice.value) + installment_val
                     if initial_status == 'PAID':
-                        invoice.amount_paid += installment_val
+                        invoice.amount_paid = to_decimal(invoice.amount_paid) + installment_val
                     invoice.save()
 
                 # --- RECEITA ---
                 elif transaction_type == 'INCOME':
                     if not account_id: return Response({'error': 'Selecione uma conta.'}, status=status.HTTP_400_BAD_REQUEST)
                     account = Account.objects.get(id=account_id, house=house)
-                    account.balance += total_value 
+                    
+                    current_balance = to_decimal(account.balance)
+                    account.balance = current_balance + total_value 
                     account.save()
 
                 # 3. Transação Principal
@@ -525,7 +523,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
                         items_objects.append(TransactionItem(
                             transaction=transaction_instance,
                             description=item.get('description', 'Item'),
-                            value=Decimal(str(item.get('value', 0))),
+                            value=to_decimal(item.get('value', 0)),
                             quantity=float(item.get('quantity', 1))
                         ))
                     TransactionItem.objects.bulk_create(items_objects)
@@ -539,13 +537,9 @@ class TransactionViewSet(viewsets.ModelViewSet):
                         base_date = datetime.datetime.strptime(base_date, "%Y-%m-%d").date()
                     
                     for i in range(1, installments):
-                        # Data base da parcela futura
                         parcel_date = base_date + relativedelta(months=i)
-                        
-                        # Calcula a referência correta da fatura
                         fut_ref = get_invoice_ref_date(parcel_date, card.closing_day)
                         fut_due = safe_due_date(fut_ref, card.due_day)
-                        
                         fut_status = 'PAID' if fut_due < today else 'OPEN'
 
                         fut_invoice, _ = Invoice.objects.get_or_create(
@@ -553,16 +547,16 @@ class TransactionViewSet(viewsets.ModelViewSet):
                             defaults={'value': 0, 'status': fut_status}
                         )
                         
-                        fut_invoice.value += installment_val
+                        fut_invoice.value = to_decimal(fut_invoice.value) + installment_val
                         if fut_status == 'PAID':
-                            fut_invoice.amount_paid += installment_val
+                            fut_invoice.amount_paid = to_decimal(fut_invoice.amount_paid) + installment_val
                         fut_invoice.save()
 
                         new_transactions.append(Transaction(
                             house=house,
                             description=f"{data.get('description')} ({i+1}/{installments})",
                             value=installment_val, type='EXPENSE',
-                            invoice=fut_invoice, date=parcel_date, # Data da transação = data da parcela
+                            invoice=fut_invoice, date=parcel_date,
                             category_id=data.get('category'),
                             is_shared=data.get('is_shared', False)
                         ))
@@ -578,7 +572,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
         except CreditCard.DoesNotExist:
              return Response({'error': 'Cartão não encontrado.'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
-            print(f"ERRO TRANSACTION: {e}")
+            print(f"ERRO CRITICO TRANSACTION: {e}")
             return Response({'error': f"Erro interno: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
 # ======================================================================
@@ -645,7 +639,6 @@ class ShoppingListViewSet(BaseHouseViewSet):
         source_id = data.get('source_id')
         total_paid = Decimal(str(data.get('total_value', 0)).replace(',', '.'))
         
-        # Data da compra (pode ser retroativa)
         purchase_date_str = data.get('date')
         today = datetime.date.today()
         purchase_date = datetime.datetime.strptime(purchase_date_str, "%Y-%m-%d").date() if purchase_date_str else today
@@ -666,31 +659,33 @@ class ShoppingListViewSet(BaseHouseViewSet):
 
                 if payment_method == 'ACCOUNT':
                     account = Account.objects.get(id=source_id, house=house)
-                    if total_paid > account.balance:
+                    current_balance = to_decimal(account.balance)
+                    
+                    if total_paid > current_balance:
                          return Response({'error': f'Saldo insuficiente na conta {account.name}.'}, status=status.HTTP_400_BAD_REQUEST)
-                    account.balance -= total_paid
+                    
+                    account.balance = current_balance - total_paid
                     account.save()
                     description = f"Mercado ({account.name})"
                 
                 elif payment_method == 'CREDIT_CARD':
                     card = CreditCard.objects.get(id=source_id, house=house)
-                    if total_paid > card.limit_available:
+                    current_limit = to_decimal(card.limit_available)
+                    
+                    if total_paid > current_limit:
                         return Response({'error': 'Limite insuficiente no cartão.'}, status=status.HTTP_400_BAD_REQUEST)
                     
-                    # --- LÓGICA DE FATURA RETROATIVA (MANTENDO CONSISTÊNCIA) ---
                     ref_date = get_invoice_ref_date(purchase_date, card.closing_day)
                     
-                    # Se for retroativa e já venceu, marca como PAGA ou ABERTA?
-                    # Se estamos fechando uma compra no passado, assumimos que vamos pagar essa fatura logo
-                    # ou que ela já está em aberto. Manter OPEN é seguro.
                     invoice, _ = Invoice.objects.get_or_create(
                         card=card, reference_date=ref_date, 
                         defaults={'value': 0, 'status': 'OPEN'}
                     )
-                    invoice.value += total_paid
+                    
+                    invoice.value = to_decimal(invoice.value) + total_paid
                     invoice.save()
                     
-                    card.limit_available -= total_paid
+                    card.limit_available = current_limit - total_paid
                     card.save()
                     description = f"Mercado ({card.name})"
 
