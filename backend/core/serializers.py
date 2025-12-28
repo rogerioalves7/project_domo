@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from django.db.models import Sum  # <--- IMPORTANTE: Necessário para somar as transações
+from django.db.models import Sum  # Necessário para recalcular fatura
 from .models import (
     House, HouseMember, Account, CreditCard, Invoice, 
     Transaction, Product, InventoryItem, ShoppingList, 
@@ -53,12 +53,13 @@ class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = '__all__'
+        read_only_fields = ['house']  # Evita erro 400 na criação
 
 class AccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = Account
         fields = ['id', 'name', 'balance', 'limit', 'is_shared', 'owner']
-        read_only_fields = ['owner']
+        read_only_fields = ['owner', 'house']  # Owner e House são automáticos
 
 class CreditCardSerializer(serializers.ModelSerializer):
     invoice_info = serializers.SerializerMethodField()
@@ -66,7 +67,7 @@ class CreditCardSerializer(serializers.ModelSerializer):
     class Meta:
         model = CreditCard
         fields = ['id', 'name', 'limit_total', 'limit_available', 'closing_day', 'due_day', 'is_shared', 'invoice_info', 'owner']
-        read_only_fields = ['owner']
+        read_only_fields = ['owner', 'house']
 
     def get_invoice_info(self, obj):
         # 1. Prioridade: Buscar a fatura mais antiga que NÃO está paga (Dezembro antes de Janeiro)
@@ -83,18 +84,20 @@ class CreditCardSerializer(serializers.ModelSerializer):
             ).order_by('-reference_date').first()
 
         if target_invoice:
-            # --- CORREÇÃO DE VALOR (SOMA REAL) ---
-            # Aqui garantimos que o valor exibido é a soma exata das transações no banco
-            real_total = Transaction.objects.filter(invoice=target_invoice).aggregate(total=Sum('value'))['total'] or 0
+            # LÓGICA DE SELF-HEALING (CORREÇÃO AUTOMÁTICA)
+            # Recalcula o valor real da fatura somando as transações vinculadas a ela.
+            real_total = Transaction.objects.filter(
+                invoice=target_invoice
+            ).aggregate(total=Sum('value'))['total'] or 0
             
-            # Self-healing: Se o valor cacheado na fatura estiver errado, corrigimos agora
+            # Se o valor cacheado na fatura estiver errado, atualiza o banco silenciosamente
             if real_total != target_invoice.value:
                 target_invoice.value = real_total
                 target_invoice.save()
 
             return {
                 'id': target_invoice.id,
-                'value': real_total, # Retorna o valor calculado na hora
+                'value': real_total, # Retorna o valor real calculado
                 'status': target_invoice.status,
                 'reference_date': target_invoice.reference_date,
                 'amount_paid': target_invoice.amount_paid
@@ -105,6 +108,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Invoice
         fields = '__all__'
+        read_only_fields = ['house']
 
 class RecurringBillSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
@@ -113,6 +117,7 @@ class RecurringBillSerializer(serializers.ModelSerializer):
     class Meta:
         model = RecurringBill
         fields = ['id', 'name', 'base_value', 'due_day', 'category', 'category_name', 'is_paid_this_month', 'is_active']
+        read_only_fields = ['house']
 
     def get_is_paid_this_month(self, obj):
         today = datetime.date.today()
@@ -143,6 +148,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             'category', 'category_name', 'account', 'invoice', 
             'recurring_bill', 'is_shared', 'items', 'source_name', 'owner_name'
         ]
+        read_only_fields = ['house'] # Importante para evitar erro 500/400
 
     def get_source_name(self, obj):
         if obj.account:
@@ -167,6 +173,7 @@ class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = '__all__'
+        read_only_fields = ['house']
 
 class InventoryItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
@@ -174,6 +181,7 @@ class InventoryItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = InventoryItem
         fields = ['id', 'product', 'product_name', 'quantity', 'min_quantity']
+        read_only_fields = ['house']
 
 class ShoppingListSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
@@ -185,6 +193,7 @@ class ShoppingListSerializer(serializers.ModelSerializer):
             'id', 'product', 'product_name', 'quantity_to_buy', 
             'estimated_price', 'real_unit_price', 'discount_unit_price', 'is_purchased'
         ]
+        read_only_fields = ['house']
 
 class HouseInvitationSerializer(serializers.ModelSerializer):
     inviter_name = serializers.CharField(source='inviter.username', read_only=True)
