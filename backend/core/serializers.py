@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from django.db.models import Sum  # <--- IMPORTANTE: Necessário para somar as transações
 from .models import (
     House, HouseMember, Account, CreditCard, Invoice, 
     Transaction, Product, InventoryItem, ShoppingList, 
@@ -9,7 +10,9 @@ import datetime
 
 User = get_user_model()
 
-# --- USUÁRIOS E CASA ---
+# ======================================================================
+# USUÁRIOS E CASA
+# ======================================================================
 
 class UserSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(required=True) 
@@ -42,7 +45,9 @@ class HouseMemberSerializer(serializers.ModelSerializer):
         fields = ['id', 'user', 'house', 'role', 'user_name', 'user_email']
         read_only_fields = ['user', 'house']
 
-# --- FINANCEIRO ---
+# ======================================================================
+# FINANCEIRO (Contas, Cartões, Faturas)
+# ======================================================================
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -55,7 +60,6 @@ class AccountSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'balance', 'limit', 'is_shared', 'owner']
         read_only_fields = ['owner']
 
-# --- MUDANÇA PRINCIPAL: LOGICA DE FATURA INTELIGENTE ---
 class CreditCardSerializer(serializers.ModelSerializer):
     invoice_info = serializers.SerializerMethodField()
 
@@ -73,16 +77,24 @@ class CreditCardSerializer(serializers.ModelSerializer):
         ).order_by('reference_date').first()
 
         # 2. Fallback: Se todas estiverem pagas, pega a última fatura criada (para mostrar o mês atual/futuro)
-        # Isso evita o retorno "Sem Fatura" quando o usuário está em dia.
         if not target_invoice:
             target_invoice = Invoice.objects.filter(
                 card=obj
             ).order_by('-reference_date').first()
 
         if target_invoice:
+            # --- CORREÇÃO DE VALOR (SOMA REAL) ---
+            # Aqui garantimos que o valor exibido é a soma exata das transações no banco
+            real_total = Transaction.objects.filter(invoice=target_invoice).aggregate(total=Sum('value'))['total'] or 0
+            
+            # Self-healing: Se o valor cacheado na fatura estiver errado, corrigimos agora
+            if real_total != target_invoice.value:
+                target_invoice.value = real_total
+                target_invoice.save()
+
             return {
                 'id': target_invoice.id,
-                'value': target_invoice.value,
+                'value': real_total, # Retorna o valor calculado na hora
                 'status': target_invoice.status,
                 'reference_date': target_invoice.reference_date,
                 'amount_paid': target_invoice.amount_paid
@@ -147,7 +159,9 @@ class TransactionSerializer(serializers.ModelSerializer):
             return obj.invoice.card.owner.first_name or obj.invoice.card.owner.username
         return "Casa"
 
-# --- ESTOQUE E COMPRAS ---
+# ======================================================================
+# ESTOQUE E COMPRAS
+# ======================================================================
 
 class ProductSerializer(serializers.ModelSerializer):
     class Meta:
@@ -180,7 +194,9 @@ class HouseInvitationSerializer(serializers.ModelSerializer):
         model = HouseInvitation
         fields = ['id', 'email', 'house', 'house_name', 'inviter_name', 'created_at', 'accepted']
 
-# --- AUTH ---
+# ======================================================================
+# AUTH E PERFIL
+# ======================================================================
 
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
