@@ -1,27 +1,29 @@
 import sys
 import re
 import calendar
+import datetime
+from decimal import Decimal, InvalidOperation
+from dateutil.relativedelta import relativedelta
+
 from django.shortcuts import get_object_or_404
 from django.db import models, transaction as db_transaction, IntegrityError
 from django.db.models import Q, F, Sum
 from django.db.models.functions import TruncMonth
 from django.conf import settings
 from django.core.mail import send_mail
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError as DjangoValidationError
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.contrib.auth.password_validation import validate_password
-from decimal import Decimal, InvalidOperation
-import datetime
-from dateutil.relativedelta import relativedelta
 
 from rest_framework import viewsets, permissions, status, generics
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.exceptions import ValidationError
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.authtoken.models import Token
 
@@ -41,39 +43,32 @@ from .serializers import (
 
 User = get_user_model()
 
+# --- CORREÇÃO DO ERRO DE ORDEM ---
+# 1. Primeiro definimos a classe
 class CustomTokenGenerator(PasswordResetTokenGenerator):
     def _make_hash_value(self, user, timestamp):
         return str(user.pk) + user.password + str(timestamp)
 
+# 2. Depois instanciamos ela (Isso evita o NameError)
 custom_token_generator = CustomTokenGenerator()
 
 # ======================================================================
-# FUNÇÕES AUXILIARES (DATAS E VALORES)
+# FUNÇÕES AUXILIARES
 # ======================================================================
 
 def get_invoice_ref_date(transaction_date, closing_day):
-    """
-    Calcula a data de referência (mês/ano) da fatura com base na data da compra.
-    Retorna sempre o dia 1 do mês de competência da fatura.
-    """
     if transaction_date.day >= closing_day:
-        # Se comprou depois do fechamento, vai para o próximo mês
         next_month = transaction_date + relativedelta(months=1)
         return next_month.replace(day=1)
     else:
-        # Se comprou antes, fica no mês atual da compra
         return transaction_date.replace(day=1)
 
 def safe_due_date(reference_date, due_day):
-    """
-    Garante que o dia de vencimento exista no mês (ex: evita erro de dia 30 em Fevereiro).
-    """
     last_day = calendar.monthrange(reference_date.year, reference_date.month)[1]
     safe_day = min(due_day, last_day)
     return reference_date.replace(day=safe_day)
 
 def to_decimal(value):
-    """Converte com segurança qualquer valor para Decimal"""
     if value is None: return Decimal('0.00')
     try:
         if isinstance(value, str):
@@ -179,7 +174,7 @@ class HouseMemberViewSet(BaseHouseViewSet):
 
         instance = self.get_object()
         if instance.user == requester:
-             return Response({'error': 'Você não pode se remover/banir. Use a opção "Sair da Casa".'}, status=status.HTTP_400_BAD_REQUEST)
+             return Response({'error': 'Você não pode se remover/banir.'}, status=status.HTTP_400_BAD_REQUEST)
 
         return super().destroy(request, *args, **kwargs)
 
@@ -188,7 +183,7 @@ class CategoryViewSet(BaseHouseViewSet):
     serializer_class = CategorySerializer
 
 # ======================================================================
-# HISTÓRICO E ANÁLISE
+# HISTÓRICO
 # ======================================================================
 
 class HistoryViewSet(viewsets.ViewSet):
@@ -342,25 +337,20 @@ class InvoiceViewSet(BaseHouseViewSet):
                 account=account, date=date_payment, category=None 
             )
 
-            # Lógica de pagamento (Decimal Seguro)
             invoice.amount_paid = to_decimal(invoice.amount_paid) + payment_value
-            invoice.value = to_decimal(invoice.value) # Garante que está atualizado
-            
+            invoice.value = to_decimal(invoice.value)
             if invoice.amount_paid >= invoice.value:
                 invoice.status = 'PAID'
             invoice.save()
 
-            # Libera limite (Decimal Seguro)
             current_available = to_decimal(invoice.card.limit_available)
             max_limit = to_decimal(invoice.card.limit_total)
-            
             new_available = current_available + payment_value
             if new_available > max_limit: new_available = max_limit
             
             invoice.card.limit_available = new_available
             invoice.card.save()
             
-            # Debita da conta (Decimal Seguro)
             account.balance = to_decimal(account.balance) - payment_value
             account.save()
 
@@ -388,7 +378,7 @@ class RecurringBillViewSet(BaseHouseViewSet):
         return super().update(request, *args, **kwargs)
 
 # ======================================================================
-# TRANSAÇÕES (OTIMIZADO)
+# TRANSAÇÕES
 # ======================================================================
 
 class TransactionViewSet(viewsets.ModelViewSet):
@@ -401,16 +391,9 @@ class TransactionViewSet(viewsets.ModelViewSet):
         my_house_ids = HouseMember.objects.filter(user=user).values_list('house_id', flat=True)
         allowed_users_ids = HouseMember.objects.filter(house_id__in=my_house_ids).values_list('user_id', flat=True)
 
-        # OTIMIZAÇÃO CRÍTICA (N+1 Queries)
-        # select_related carrega as chaves estrangeiras na query principal
         queryset = Transaction.objects.select_related(
-            'category',
-            'account',
-            'account__owner',        # Necessário para owner_name
-            'invoice',
-            'invoice__card',         # Necessário para source_name
-            'invoice__card__owner',  # Necessário para owner_name
-            'recurring_bill'
+            'category', 'account', 'account__owner', 'invoice', 
+            'invoice__card', 'invoice__card__owner', 'recurring_bill'
         ).filter(
             Q(account__owner=user) | 
             Q(invoice__card__owner=user) |  
@@ -418,14 +401,10 @@ class TransactionViewSet(viewsets.ModelViewSet):
             Q(is_shared=True, invoice__card__owner__id__in=allowed_users_ids)
         ).distinct().order_by('-date', '-created_at')
 
-        # Permite limitar a quantidade para o Dashboard (ex: ?limit=20)
         limit = self.request.query_params.get('limit')
         if limit:
-            try:
-                return queryset[:int(limit)]
-            except ValueError:
-                pass
-
+            try: return queryset[:int(limit)]
+            except ValueError: pass
         return queryset
 
     def create(self, request, *args, **kwargs):
@@ -453,44 +432,32 @@ class TransactionViewSet(viewsets.ModelViewSet):
                 card = None
                 invoice = None
                 
-                # --- DESPESA (CONTA) ---
                 if transaction_type == 'EXPENSE' and payment_method == 'ACCOUNT':
                     if not account_id: return Response({'error': 'Selecione uma conta.'}, status=status.HTTP_400_BAD_REQUEST)
                     account = Account.objects.get(id=account_id, house=house)
-                    
                     current_balance = to_decimal(account.balance)
                     current_limit = to_decimal(account.limit)
-                    
                     if total_value > (current_balance + current_limit):
                         return Response({'error': f'Saldo insuficiente.'}, status=status.HTTP_400_BAD_REQUEST)
-                    
                     account.balance = current_balance - total_value
                     account.save()
 
-                # --- DESPESA (CARTÃO) ---
                 elif transaction_type == 'EXPENSE' and payment_method == 'CREDIT_CARD':
                     if not card_id: return Response({'error': 'Selecione um cartão.'}, status=status.HTTP_400_BAD_REQUEST)
                     card = CreditCard.objects.get(id=card_id, house=house)
-                    
                     installments = int(data.get('installments', 1))
                     
-                    # CORREÇÃO DATA: Usa a data da compra, não "Hoje"
                     today = datetime.date.today()
                     tx_date_str = data.get('date')
                     tx_date = datetime.datetime.strptime(tx_date_str, "%Y-%m-%d").date() if tx_date_str else today
-                    
                     installment_val = total_value / installments
 
-                    # 1. Dedução de Limite
                     amount_to_deduct = Decimal(0)
                     for i in range(installments):
                         parcel_date = tx_date + relativedelta(months=i)
                         ref_date = get_invoice_ref_date(parcel_date, card.closing_day)
                         due_date = safe_due_date(ref_date, card.due_day)
-                        
-                        # Só deduz se a fatura ainda vai vencer (ou vence hoje)
-                        if due_date >= today:
-                            amount_to_deduct += installment_val
+                        if due_date >= today: amount_to_deduct += installment_val
 
                     current_limit_avail = to_decimal(card.limit_available)
                     if amount_to_deduct > current_limit_avail:
@@ -499,62 +466,38 @@ class TransactionViewSet(viewsets.ModelViewSet):
                     card.limit_available = current_limit_avail - amount_to_deduct
                     card.save()
 
-                    # 2. Gera/Atualiza Fatura (Usando data da compra!)
                     first_ref = get_invoice_ref_date(tx_date, card.closing_day)
                     first_due = safe_due_date(first_ref, card.due_day)
-                    
-                    # Status: Se já venceu no passado e não foi paga, criamos como OPEN
-                    # (para permitir pagamento agora) ou PAID se o usuário marcar?
-                    # Padrão seguro: OPEN, a menos que due_date seja muito antigo
                     initial_status = 'PAID' if first_due < today else 'OPEN'
 
-                    # Caso especial: Se estou lançando algo retroativo em uma fatura que 
-                    # JÁ EXISTE no banco, mantenho o status dela.
                     invoice, created = Invoice.objects.get_or_create(
                         card=card, reference_date=first_ref,
                         defaults={'value': 0, 'status': initial_status}
                     )
-                    
                     invoice.value = to_decimal(invoice.value) + installment_val
-                    
-                    # Se a fatura estava PAGA e adicionei algo novo nela (retroativo),
-                    # devo reabrir ou considerar pago?
-                    # Decisão: Se initial_status era PAID (lógica temporal), somo ao paid.
-                    if initial_status == 'PAID':
-                        invoice.amount_paid = to_decimal(invoice.amount_paid) + installment_val
-                    
+                    if initial_status == 'PAID': invoice.amount_paid = to_decimal(invoice.amount_paid) + installment_val
                     invoice.save()
 
-                # --- RECEITA ---
                 elif transaction_type == 'INCOME':
                     if not account_id: return Response({'error': 'Selecione uma conta.'}, status=status.HTTP_400_BAD_REQUEST)
                     account = Account.objects.get(id=account_id, house=house)
                     account.balance = to_decimal(account.balance) + total_value 
                     account.save()
 
-                # 3. Transação Principal
                 installments = int(data.get('installments', 1))
                 final_desc = data.get('description')
                 final_val = total_value
-
                 if installments > 1:
                     final_desc = f"{data.get('description')} (1/{installments})"
                     final_val = total_value / installments
 
                 transaction_instance = Transaction.objects.create(
-                    house=house,
-                    description=final_desc,
-                    value=final_val,
-                    type=transaction_type,
-                    date=data.get('date', datetime.date.today()),
-                    category_id=data.get('category'),
-                    account=account,
-                    invoice=invoice,
-                    recurring_bill_id=data.get('recurring_bill'),
+                    house=house, description=final_desc, value=final_val, type=transaction_type,
+                    date=data.get('date', datetime.date.today()), category_id=data.get('category'),
+                    account=account, invoice=invoice, recurring_bill_id=data.get('recurring_bill'),
                     is_shared=data.get('is_shared', False)
                 )
 
-                # 4. Itens
                 if items_data and isinstance(items_data, list):
                     items_objects = []
                     for item in items_data:
@@ -566,56 +509,39 @@ class TransactionViewSet(viewsets.ModelViewSet):
                         ))
                     TransactionItem.objects.bulk_create(items_objects)
                 
-                # 5. Parcelas Futuras
                 if installments > 1 and card and transaction_type == 'EXPENSE':
                     installment_val = total_value / installments
                     new_transactions = []
-                    
-                    # Data base da primeira parcela (já salva)
                     base_date = transaction_instance.date
-                    if isinstance(base_date, str):
-                        base_date = datetime.datetime.strptime(base_date, "%Y-%m-%d").date()
+                    if isinstance(base_date, str): base_date = datetime.datetime.strptime(base_date, "%Y-%m-%d").date()
                     
                     for i in range(1, installments):
                         parcel_date = base_date + relativedelta(months=i)
-                        
                         fut_ref = get_invoice_ref_date(parcel_date, card.closing_day)
                         fut_due = safe_due_date(fut_ref, card.due_day)
-                        
                         fut_status = 'PAID' if fut_due < today else 'OPEN'
 
-                        fut_invoice, _ = Invoice.objects.get_or_create(
-                            card=card, reference_date=fut_ref,
-                            defaults={'value': 0, 'status': fut_status}
-                        )
-                        
+                        fut_invoice, _ = Invoice.objects.get_or_create(card=card, reference_date=fut_ref, defaults={'value': 0, 'status': fut_status})
                         fut_invoice.value = to_decimal(fut_invoice.value) + installment_val
-                        if fut_status == 'PAID':
-                            fut_invoice.amount_paid = to_decimal(fut_invoice.amount_paid) + installment_val
+                        if fut_status == 'PAID': fut_invoice.amount_paid = to_decimal(fut_invoice.amount_paid) + installment_val
                         fut_invoice.save()
 
                         new_transactions.append(Transaction(
-                            house=house,
-                            description=f"{data.get('description')} ({i+1}/{installments})",
-                            value=installment_val, type='EXPENSE',
-                            invoice=fut_invoice, date=parcel_date,
-                            category_id=data.get('category'),
-                            is_shared=data.get('is_shared', False)
+                            house=house, description=f"{data.get('description')} ({i+1}/{installments})",
+                            value=installment_val, type='EXPENSE', invoice=fut_invoice, date=parcel_date,
+                            category_id=data.get('category'), is_shared=data.get('is_shared', False)
                         ))
-                    
                     Transaction.objects.bulk_create(new_transactions)
 
                 serializer = self.get_serializer(transaction_instance)
                 headers = self.get_success_headers(serializer.data)
                 return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-        except Account.DoesNotExist:
-             return Response({'error': 'Conta não encontrada.'}, status=status.HTTP_400_BAD_REQUEST)
-        except CreditCard.DoesNotExist:
-             return Response({'error': 'Cartão não encontrado.'}, status=status.HTTP_400_BAD_REQUEST)
+        except Account.DoesNotExist: return Response({'error': 'Conta não encontrada.'}, status=400)
+        except CreditCard.DoesNotExist: return Response({'error': 'Cartão não encontrado.'}, status=400)
         except Exception as e:
             print(f"ERRO CRITICO TRANSACTION: {e}")
-            return Response({'error': f"Erro interno: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': f"Erro interno: {str(e)}"}, status=400)
 
 # ======================================================================
 # ESTOQUE E COMPRAS
@@ -628,7 +554,6 @@ class ProductViewSet(BaseHouseViewSet):
 class InventoryViewSet(BaseHouseViewSet):
     queryset = InventoryItem.objects.all()
     serializer_class = InventoryItemSerializer
-    
     def perform_create(self, serializer):
         user = self.request.user
         product_id = self.request.data.get('product')
@@ -644,22 +569,20 @@ class ShoppingListViewSet(BaseHouseViewSet):
     def get_queryset(self):
         user = self.request.user
         if not hasattr(user, 'house_member'): return ShoppingList.objects.none()
-        
         house = user.house_member.house
+        
         low_stock_items = InventoryItem.objects.filter(house=house, quantity__lt=models.F('min_quantity'))
-        low_stock_product_ids = []
-
+        
         for item in low_stock_items:
-            low_stock_product_ids.append(item.product.id)
             needed = item.min_quantity - item.quantity
             if needed <= 0: needed = Decimal('1.00')
-
+            
             obj, created = ShoppingList.objects.get_or_create(
                 house=house, product=item.product,
                 defaults={
                     'quantity_to_buy': needed, 
-                    'real_unit_price': item.product.estimated_price,
-                    'discount_unit_price': item.product.estimated_price,
+                    'real_unit_price': item.product.estimated_price, 
+                    'discount_unit_price': item.product.estimated_price, 
                     'is_purchased': False
                 }
             )
@@ -668,8 +591,27 @@ class ShoppingListViewSet(BaseHouseViewSet):
                     obj.quantity_to_buy = needed
                     obj.save()
 
-        ShoppingList.objects.filter(house=house, is_purchased=False).exclude(product_id__in=low_stock_product_ids).delete()
+        # [CORREÇÃO] Removida a linha que deletava itens manuais.
+        
         return ShoppingList.objects.filter(house=house).order_by('is_purchased', 'product__name')
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        house = user.house_member.house
+        
+        # Lógica de criação "Lazy" para suporte Offline
+        if not serializer.validated_data.get('product'):
+            name = serializer.validated_data.pop('create_product_name', None)
+            if name:
+                product, _ = Product.objects.get_or_create(
+                    house=house, name__iexact=name, 
+                    defaults={'name': name, 'min_quantity': 1, 'estimated_price': 0}
+                )
+                serializer.validated_data['product'] = product
+            else:
+                raise ValidationError({"product": "Informe o produto ou o nome."})
+        
+        serializer.save(house=house)
 
     @action(detail=False, methods=['post'])
     def finish(self, request):
@@ -685,12 +627,10 @@ class ShoppingListViewSet(BaseHouseViewSet):
         today = datetime.date.today()
         purchase_date = datetime.datetime.strptime(purchase_date_str, "%Y-%m-%d").date() if purchase_date_str else today
 
-        if not payment_method or not source_id:
-            return Response({'error': 'Selecione uma forma de pagamento.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not payment_method or not source_id: return Response({'error': 'Selecione uma forma de pagamento.'}, status=400)
 
         purchased_items = ShoppingList.objects.filter(house=house, is_purchased=True)
-        if not purchased_items.exists():
-            return Response({'error': 'Carrinho vazio.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not purchased_items.exists(): return Response({'error': 'Carrinho vazio.'}, status=400)
 
         try:
             with db_transaction.atomic():
@@ -701,41 +641,27 @@ class ShoppingListViewSet(BaseHouseViewSet):
 
                 if payment_method == 'ACCOUNT':
                     account = Account.objects.get(id=source_id, house=house)
-                    current_balance = to_decimal(account.balance)
-                    
-                    if total_paid > current_balance:
-                         return Response({'error': f'Saldo insuficiente.'}, status=status.HTTP_400_BAD_REQUEST)
-                    
-                    account.balance = current_balance - total_paid
+                    if total_paid > to_decimal(account.balance): return Response({'error': f'Saldo insuficiente.'}, status=400)
+                    account.balance = to_decimal(account.balance) - total_paid
                     account.save()
                     description = f"Mercado ({account.name})"
                 
                 elif payment_method == 'CREDIT_CARD':
                     card = CreditCard.objects.get(id=source_id, house=house)
-                    current_limit = to_decimal(card.limit_available)
+                    if total_paid > to_decimal(card.limit_available): return Response({'error': 'Limite insuficiente.'}, status=400)
                     
-                    if total_paid > current_limit:
-                        return Response({'error': 'Limite insuficiente no cartão.'}, status=status.HTTP_400_BAD_REQUEST)
-                    
-                    # Lógica de Fatura (Com data correta)
                     ref_date = get_invoice_ref_date(purchase_date, card.closing_day)
-                    
-                    invoice, _ = Invoice.objects.get_or_create(
-                        card=card, reference_date=ref_date, 
-                        defaults={'value': 0, 'status': 'OPEN'}
-                    )
-                    
+                    invoice, _ = Invoice.objects.get_or_create(card=card, reference_date=ref_date, defaults={'value': 0, 'status': 'OPEN'})
                     invoice.value = to_decimal(invoice.value) + total_paid
                     invoice.save()
                     
-                    card.limit_available = current_limit - total_paid
+                    card.limit_available = to_decimal(card.limit_available) - total_paid
                     card.save()
                     description = f"Mercado ({card.name})"
 
                 transaction = Transaction.objects.create(
-                    house=house, description=description, value=total_paid,
-                    type='EXPENSE', account=account, invoice=invoice,
-                    category=category, date=purchase_date
+                    house=house, description=description, value=total_paid, type='EXPENSE', 
+                    account=account, invoice=invoice, category=category, date=purchase_date
                 )
 
                 transaction_items = []
@@ -743,44 +669,31 @@ class ShoppingListViewSet(BaseHouseViewSet):
                 for shop_item in purchased_items:
                     qty = shop_item.quantity_to_buy
                     unit_price = to_decimal(shop_item.real_unit_price)
-                    if unit_price <= 0:
-                         unit_price = to_decimal(shop_item.discount_unit_price) if shop_item.discount_unit_price > 0 else to_decimal(shop_item.product.estimated_price)
+                    if unit_price <= 0: unit_price = to_decimal(shop_item.discount_unit_price) if shop_item.discount_unit_price > 0 else to_decimal(shop_item.product.estimated_price)
 
-                    transaction_items.append(TransactionItem(
-                        transaction=transaction, description=shop_item.product.name, 
-                        quantity=qty, value=unit_price * qty 
-                    ))
-
-                    inv_item, _ = InventoryItem.objects.get_or_create(
-                        house=house, product=shop_item.product, 
-                        defaults={'min_quantity': 1, 'quantity': 0}
-                    )
+                    transaction_items.append(TransactionItem(transaction=transaction, description=shop_item.product.name, quantity=qty, value=unit_price * qty))
+                    inv_item, _ = InventoryItem.objects.get_or_create(house=house, product=shop_item.product, defaults={'min_quantity': 1, 'quantity': 0})
                     inv_item.quantity += qty
                     inv_item.save()
-
                     if unit_price > 0:
                         shop_item.product.estimated_price = unit_price
                         shop_item.product.save()
-
                     count += 1
 
                 TransactionItem.objects.bulk_create(transaction_items)
                 purchased_items.delete()
 
-                return Response({'message': f'Compra finalizada! {count} itens.'}, status=status.HTTP_200_OK)
+                return Response({'message': f'Compra finalizada! {count} itens.'}, status=200)
 
-        except (Account.DoesNotExist, CreditCard.DoesNotExist):
-            return Response({'error': 'Meio de pagamento não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({'error': f"Erro interno: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        except (Account.DoesNotExist, CreditCard.DoesNotExist): return Response({'error': 'Meio de pagamento não encontrado.'}, status=404)
+        except Exception as e: return Response({'error': f"Erro interno: {str(e)}"}, status=400)
 
 # ======================================================================
-# GESTÃO DE USUÁRIO E CONVITES
+# CONVITES E AUTH
 # ======================================================================
 
 class InvitationViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated]
-
     def list(self, request):
         user = request.user
         if not hasattr(user, 'house_member'): return Response([])
@@ -792,28 +705,16 @@ class InvitationViewSet(viewsets.ViewSet):
     def create(self, request):
         email = request.data.get('email')
         user = request.user
-        
         if not hasattr(user, 'house_member'): return Response({'error': 'Você não pertence a uma casa.'}, status=400)
         house = user.house_member.house
-        
-        if HouseInvitation.objects.filter(house=house, email=email, accepted=False).exists():
-            return Response({'error': 'Já existe um convite pendente para este e-mail.'}, status=400)
-
-        if HouseMember.objects.filter(house=house, user__email=email).exists():
-             return Response({'error': 'Este usuário já faz parte da casa.'}, status=400)
-
+        if HouseInvitation.objects.filter(house=house, email=email, accepted=False).exists(): return Response({'error': 'Convite pendente existente.'}, status=400)
+        if HouseMember.objects.filter(house=house, user__email=email).exists(): return Response({'error': 'Usuário já na casa.'}, status=400)
         invitation = HouseInvitation.objects.create(house=house, inviter=user, email=email)
         invite_link = f"http://localhost:5173/accept-invite/{invitation.id}"
-        
         try:
-            send_mail(
-                f"Convite: Junte-se à casa {house.name}",
-                f"Olá! {user.username} convidou você.\nLink: {invite_link}",
-                settings.EMAIL_HOST_USER, [email], fail_silently=False,
-            )
-            return Response({'message': 'Convite enviado por e-mail!'})
-        except:
-            return Response({'message': 'Convite criado (Link no terminal).'})
+            send_mail(f"Convite: {house.name}", f"Link: {invite_link}", settings.EMAIL_HOST_USER, [email], fail_silently=False)
+            return Response({'message': 'Convite enviado!'})
+        except: return Response({'message': 'Convite criado (Link no terminal).'})
 
     def destroy(self, request, pk=None):
         user = request.user
@@ -821,66 +722,47 @@ class InvitationViewSet(viewsets.ViewSet):
         try:
             invite = HouseInvitation.objects.get(id=pk, house=house)
             invite.delete()
-            return Response({'message': 'Convite cancelado.'}, status=status.HTTP_200_OK)
-        except HouseInvitation.DoesNotExist:
-            return Response({'error': 'Convite não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'message': 'Convite cancelado.'}, status=200)
+        except HouseInvitation.DoesNotExist: return Response({'error': 'Não encontrado.'}, status=404)
 
     @action(detail=False, methods=['post'], url_path='join')
     def join_house(self, request):
         token = request.data.get('token')
         user = request.user
-
-        if not token: return Response({'error': 'Token não fornecido.'}, status=400)
-
+        if not token: return Response({'error': 'Token necessário.'}, status=400)
         try:
             invite = HouseInvitation.objects.get(id=token, accepted=False)
             try:
-                default_member = HouseMember.objects.get(user=user, role='ADMIN')
-                default_house = default_member.house
-                if HouseMember.objects.filter(house=default_house).count() == 1:
-                    default_member.delete()
-                    default_house.delete()
-                else:
-                    default_member.delete()
-            except ObjectDoesNotExist:
-                pass 
-
+                dm = HouseMember.objects.get(user=user, role='ADMIN')
+                dh = dm.house
+                if HouseMember.objects.filter(house=dh).count() == 1: 
+                    dm.delete(); dh.delete()
+                else: dm.delete()
+            except ObjectDoesNotExist: pass 
             HouseMember.objects.create(user=user, house=invite.house, role='MEMBER')
-            invite.accepted = True
-            invite.delete()
-            return Response({'message': f'Bem-vindo à casa {invite.house.name}!'}, status=200)
-
-        except HouseInvitation.DoesNotExist:
-            return Response({'error': 'Convite inválido ou expirado.'}, status=404)
-        except Exception as e:
-            return Response({'error': str(e)}, status=400)
+            invite.accepted = True; invite.delete()
+            return Response({'message': f'Bem-vindo à {invite.house.name}!'}, status=200)
+        except HouseInvitation.DoesNotExist: return Response({'error': 'Convite inválido.'}, status=404)
+        except Exception as e: return Response({'error': str(e)}, status=400)
 
     @action(detail=False, methods=['post'])
     def accept(self, request):
         token = request.data.get('token')
         user = request.user
-        if not token: return Response({'error': 'Token de convite não fornecido.'}, status=400)
-        
+        if not token: return Response({'error': 'Token necessário.'}, status=400)
         try:
             invitation = HouseInvitation.objects.get(id=token, accepted=False)
-            if invitation.email != user.email:
-                return Response({'error': 'Este convite não é para o seu e-mail.'}, status=status.HTTP_403_FORBIDDEN)
-            if HouseMember.objects.filter(user=user, house=invitation.house).exists():
-                invitation.delete()
-                return Response({'error': 'Você já é membro desta casa.'}, status=400)
-
+            if invitation.email != user.email: return Response({'error': 'E-mail incorreto.'}, status=403)
+            if HouseMember.objects.filter(user=user, house=invitation.house).exists(): invitation.delete(); return Response({'error': 'Já é membro.'}, status=400)
             HouseMember.objects.create(user=user, house=invitation.house, role='MEMBER')
-            invitation.accepted = True
-            invitation.save()
-            return Response({'message': f'Bem-vindo à casa {invitation.house.name}!'})
-        except HouseInvitation.DoesNotExist:
-            return Response({'error': 'Convite inválido.'}, status=404)
+            invitation.accepted = True; invitation.save()
+            return Response({'message': f'Bem-vindo à {invitation.house.name}!'})
+        except HouseInvitation.DoesNotExist: return Response({'error': 'Convite inválido.'}, status=404)
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = UserSerializer
     permission_classes = [AllowAny]
     authentication_classes = []
-
     @db_transaction.atomic
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -888,36 +770,25 @@ class RegisterView(generics.CreateAPIView):
         user = serializer.save()
         email = user.email
         pending_invite = HouseInvitation.objects.filter(email=email).first()
-
         if pending_invite:
-            default_member_record = HouseMember.objects.filter(user=user).first()
-            if default_member_record:
-                orphaned_house = default_member_record.house
-                if orphaned_house.members.count() <= 1: 
-                    orphaned_house.delete()
-
-            HouseMember.objects.update_or_create(
-                user=user,
-                defaults={'house': pending_invite.house, 'role': 'MEMBER'}
-            )
+            dm = HouseMember.objects.filter(user=user).first()
+            if dm:
+                oh = dm.house
+                if oh.members.count() <= 1: oh.delete()
+            HouseMember.objects.update_or_create(user=user, defaults={'house': pending_invite.house, 'role': 'MEMBER'})
             pending_invite.delete()
-
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
 class CustomAuthToken(ObtainAuthToken):
     permission_classes = [AllowAny]
     authentication_classes = []
-
     def post(self, request, *args, **kwargs):
         serializer = self.serializer_class(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data['user']
         token, created = Token.objects.get_or_create(user=user)
-        return Response({
-            'token': token.key, 'user_id': user.pk,
-            'username': user.username, 'email': user.email
-        })
+        return Response({'token': token.key, 'user_id': user.pk, 'username': user.username, 'email': user.email})
     
 class AuthViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
@@ -925,22 +796,12 @@ class AuthViewSet(viewsets.ViewSet):
         serializer = PasswordResetRequestSerializer(data=request.data)
         if serializer.is_valid():
             email = serializer.validated_data['email']
-            try:
-                user = User.objects.get(email=email)
-            except User.DoesNotExist:
-                return Response({'status': 'Se o e-mail existir, um link foi enviado.'})
-
+            try: user = User.objects.get(email=email)
+            except User.DoesNotExist: return Response({'status': 'Link enviado (se existir).'})
             token = custom_token_generator.make_token(user)
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             reset_link = f"http://localhost:5173/reset-password/{uid}/{token}"
-
-            send_mail(
-                subject='Redefinição de Senha - Domo',
-                message=f"Link: {reset_link}",
-                from_email='noreply@domo.app',
-                recipient_list=[email],
-                fail_silently=False,
-            )
+            send_mail('Redefinição - Domo', f"Link: {reset_link}", 'noreply@domo.app', [email], fail_silently=False)
             return Response({'status': 'Link enviado.'})
         return Response(serializer.errors, status=400)
 
@@ -950,21 +811,13 @@ class AuthViewSet(viewsets.ViewSet):
         uid = data.get('uid', '').strip()
         token = data.get('token', '').strip().replace('/', '')
         new_password = data.get('new_password', '')
-        try:
-            user_id = force_str(urlsafe_base64_decode(uid))
-            user = User.objects.get(pk=user_id)
-        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
-            return Response({'error': 'Link inválido.'}, status=400)
-
+        try: user = User.objects.get(pk=force_str(urlsafe_base64_decode(uid)))
+        except: return Response({'error': 'Link inválido.'}, status=400)
         if custom_token_generator.check_token(user, token):
-            try:
-                validate_password(new_password, user)
-            except ValidationError as e:
-                return Response({'error': ' '.join(e.messages)}, status=400)
-
-            user.set_password(new_password)
-            user.save()
-            return Response({'status': 'Senha redefinida com sucesso!'})
+            try: validate_password(new_password, user)
+            except ValidationError as e: return Response({'error': ' '.join(e.messages)}, status=400)
+            user.set_password(new_password); user.save()
+            return Response({'status': 'Senha redefinida!'})
         return Response({'error': 'Token inválido.'}, status=400)
     
     @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
@@ -972,10 +825,8 @@ class AuthViewSet(viewsets.ViewSet):
         serializer = ChangePasswordSerializer(data=request.data)
         if serializer.is_valid():
             user = request.user
-            if not user.check_password(serializer.validated_data['old_password']):
-                return Response({'error': 'Senha incorreta.'}, status=400)
-            user.set_password(serializer.validated_data['new_password'])
-            user.save()
+            if not user.check_password(serializer.validated_data['old_password']): return Response({'error': 'Senha incorreta.'}, status=400)
+            user.set_password(serializer.validated_data['new_password']); user.save()
             return Response({'status': 'Senha alterada.'})
         return Response(serializer.errors, status=400)
 
@@ -984,33 +835,20 @@ class AuthViewSet(viewsets.ViewSet):
         serializer = ChangeEmailSerializer(data=request.data)
         if serializer.is_valid():
             user = request.user
-            if not user.check_password(serializer.validated_data['password']):
-                return Response({'error': 'Senha incorreta.'}, status=400)
-            user.email = serializer.validated_data['new_email']
-            user.save()
+            if not user.check_password(serializer.validated_data['password']): return Response({'error': 'Senha incorreta.'}, status=400)
+            user.email = serializer.validated_data['new_email']; user.save()
             return Response({'status': 'E-mail atualizado.'})
         return Response(serializer.errors, status=400)
     
     @action(detail=False, methods=['get'], permission_classes=[permissions.AllowAny])
     def test_smtp(self, request):
         try:
-            send_mail(
-                subject='Teste SMTP', message='Teste OK',
-                from_email=settings.DEFAULT_FROM_EMAIL, recipient_list=[settings.EMAIL_HOST_USER],
-                fail_silently=False,
-            )
+            send_mail('Teste SMTP', 'Teste OK', settings.DEFAULT_FROM_EMAIL, [settings.EMAIL_HOST_USER], fail_silently=False)
             return Response({'status': 'OK'})
-        except Exception as e:
-            return Response({'error': str(e)}, status=200)
+        except Exception as e: return Response({'error': str(e)}, status=200)
     
 class CurrentUserView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     def get(self, request):
         user = request.user
-        return Response({
-            'id': user.id,
-            'username': user.username,
-            'first_name': user.first_name,
-            'email': user.email,
-            'full_name': user.get_full_name()
-        })
+        return Response({'id': user.id, 'username': user.username, 'first_name': user.first_name, 'email': user.email, 'full_name': user.get_full_name()})

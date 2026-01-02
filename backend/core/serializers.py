@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from django.db.models import Sum  # Necessário para recalcular fatura
+from django.db.models import Sum
 from .models import (
     House, HouseMember, Account, CreditCard, Invoice, 
     Transaction, Product, InventoryItem, ShoppingList, 
@@ -46,20 +46,20 @@ class HouseMemberSerializer(serializers.ModelSerializer):
         read_only_fields = ['user', 'house']
 
 # ======================================================================
-# FINANCEIRO (Contas, Cartões, Faturas)
+# FINANCEIRO
 # ======================================================================
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = '__all__'
-        read_only_fields = ['house']  # Evita erro 400 na criação
+        read_only_fields = ['house']
 
 class AccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = Account
         fields = ['id', 'name', 'balance', 'limit', 'is_shared', 'owner']
-        read_only_fields = ['owner', 'house']  # Owner e House são automáticos
+        read_only_fields = ['owner', 'house']
 
 class CreditCardSerializer(serializers.ModelSerializer):
     invoice_info = serializers.SerializerMethodField()
@@ -70,34 +70,19 @@ class CreditCardSerializer(serializers.ModelSerializer):
         read_only_fields = ['owner', 'house']
 
     def get_invoice_info(self, obj):
-        # 1. Prioridade: Buscar a fatura mais antiga que NÃO está paga (Dezembro antes de Janeiro)
-        target_invoice = Invoice.objects.filter(
-            card=obj
-        ).exclude(
-            status='PAID'
-        ).order_by('reference_date').first()
-
-        # 2. Fallback: Se todas estiverem pagas, pega a última fatura criada (para mostrar o mês atual/futuro)
+        target_invoice = Invoice.objects.filter(card=obj).exclude(status='PAID').order_by('reference_date').first()
         if not target_invoice:
-            target_invoice = Invoice.objects.filter(
-                card=obj
-            ).order_by('-reference_date').first()
+            target_invoice = Invoice.objects.filter(card=obj).order_by('-reference_date').first()
 
         if target_invoice:
-            # LÓGICA DE SELF-HEALING (CORREÇÃO AUTOMÁTICA)
-            # Recalcula o valor real da fatura somando as transações vinculadas a ela.
-            real_total = Transaction.objects.filter(
-                invoice=target_invoice
-            ).aggregate(total=Sum('value'))['total'] or 0
-            
-            # Se o valor cacheado na fatura estiver errado, atualiza o banco silenciosamente
+            real_total = Transaction.objects.filter(invoice=target_invoice).aggregate(total=Sum('value'))['total'] or 0
             if real_total != target_invoice.value:
                 target_invoice.value = real_total
                 target_invoice.save()
 
             return {
                 'id': target_invoice.id,
-                'value': real_total, # Retorna o valor real calculado
+                'value': real_total,
                 'status': target_invoice.status,
                 'reference_date': target_invoice.reference_date,
                 'amount_paid': target_invoice.amount_paid
@@ -122,7 +107,6 @@ class RecurringBillSerializer(serializers.ModelSerializer):
     def get_is_paid_this_month(self, obj):
         today = datetime.date.today()
         start_date = today.replace(day=1)
-        # Verifica se existe transação vinculada a esta conta fixa neste mês
         return Transaction.objects.filter(
             recurring_bill=obj,
             date__gte=start_date,
@@ -148,25 +132,20 @@ class TransactionSerializer(serializers.ModelSerializer):
             'category', 'category_name', 'account', 'invoice', 
             'recurring_bill', 'is_shared', 'items', 'source_name', 'owner_name'
         ]
-        read_only_fields = ['house'] # Importante para evitar erro 500/400
+        read_only_fields = ['house']
 
     def get_source_name(self, obj):
-        if obj.account:
-            return obj.account.name
-        if obj.invoice and obj.invoice.card:
-            return f"Cartão {obj.invoice.card.name}"
+        if obj.account: return obj.account.name
+        if obj.invoice and obj.invoice.card: return f"Cartão {obj.invoice.card.name}"
         return "N/A"
 
     def get_owner_name(self, obj):
-        # Tenta pegar o nome do dono da conta ou do cartão
-        if obj.account and obj.account.owner:
-            return obj.account.owner.first_name or obj.account.owner.username
-        if obj.invoice and obj.invoice.card and obj.invoice.card.owner:
-            return obj.invoice.card.owner.first_name or obj.invoice.card.owner.username
+        if obj.account and obj.account.owner: return obj.account.owner.first_name or obj.account.owner.username
+        if obj.invoice and obj.invoice.card and obj.invoice.card.owner: return obj.invoice.card.owner.first_name or obj.invoice.card.owner.username
         return "Casa"
 
 # ======================================================================
-# ESTOQUE E COMPRAS
+# ESTOQUE E COMPRAS (ATUALIZADO PARA OFFLINE)
 # ======================================================================
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -177,7 +156,6 @@ class ProductSerializer(serializers.ModelSerializer):
 
 class InventoryItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
-    
     class Meta:
         model = InventoryItem
         fields = ['id', 'product', 'product_name', 'quantity', 'min_quantity']
@@ -187,11 +165,23 @@ class ShoppingListSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     estimated_price = serializers.DecimalField(source='product.estimated_price', max_digits=10, decimal_places=2, read_only=True)
 
+    # --- SUPORTE OFFLINE / LAZY CREATION ---
+    # Aceita nome para criar produto automaticamente se o ID não existir
+    create_product_name = serializers.CharField(write_only=True, required=False)
+    
+    # ID torna-se opcional na entrada, pois podemos usar o nome
+    product = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.all(), 
+        required=False, 
+        allow_null=True
+    )
+
     class Meta:
         model = ShoppingList
         fields = [
             'id', 'product', 'product_name', 'quantity_to_buy', 
-            'estimated_price', 'real_unit_price', 'discount_unit_price', 'is_purchased'
+            'estimated_price', 'real_unit_price', 'discount_unit_price', 
+            'is_purchased', 'create_product_name'
         ]
         read_only_fields = ['house']
 
@@ -204,7 +194,7 @@ class HouseInvitationSerializer(serializers.ModelSerializer):
         fields = ['id', 'email', 'house', 'house_name', 'inviter_name', 'created_at', 'accepted']
 
 # ======================================================================
-# AUTH E PERFIL
+# AUTH
 # ======================================================================
 
 class PasswordResetRequestSerializer(serializers.Serializer):

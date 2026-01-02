@@ -1,75 +1,142 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import Input from './Input';
 import MoneyInput from './MoneyInput';
-import { Package, Plus, Trash2, ArrowLeft, Minus, Tag, DollarSign, Hash, Ruler } from 'lucide-react';
+import { Package, Plus, Trash2, ArrowLeft, Minus, Tag, DollarSign, Hash, Ruler, WifiOff } from 'lucide-react';
 
 export default function ProductManager({ onBack }) {
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   
+  // Estados do Formulário
   const [name, setName] = useState('');
   const [unit, setUnit] = useState('un');
   const [price, setPrice] = useState('');
   const [minQty, setMinQty] = useState('1');
 
-  useEffect(() => {
-    fetchProducts();
-  }, []);
+  // --- 1. LEITURA (CACHE COMPARTILHADO) ---
+  const { data: products = [], isLoading } = useQuery({
+    queryKey: ['products'],
+    queryFn: () => api.get('/products/').then(res => res.data),
+    staleTime: 1000 * 60 * 60, // 1 hora de cache (dados estáticos)
+  });
 
-  async function fetchProducts() {
-    try {
-      const response = await api.get('/products/');
-      setProducts(response.data);
-    } catch (error) {
-      toast.error("Erro ao carregar produtos");
-    } finally {
-      setLoading(false);
-    }
-  }
+  // --- 2. MUTAÇÃO DE CRIAÇÃO (OFFLINE-FIRST) ---
+  const createMutation = useMutation({
+    mutationFn: (newProduct) => api.post('/products/', newProduct),
+    retry: 3,
+    
+    onMutate: async (newProduct) => {
+      await queryClient.cancelQueries({ queryKey: ['products'] });
+      const previousProducts = queryClient.getQueryData(['products']);
 
-  async function handleCreate(e) {
-    e.preventDefault();
-    if (!name) return;
+      const optimisticProduct = {
+        id: `temp-${Date.now()}`,
+        ...newProduct,
+        is_offline: true
+      };
 
-    try {
-      const finalPrice = price || 0;
-      await api.post('/products/', { 
-          name, 
-          measure_unit: unit,
-          estimated_price: finalPrice,
-          min_quantity: parseFloat(minQty) || 1 
+      queryClient.setQueryData(['products'], (old) => {
+        return old 
+          ? [optimisticProduct, ...old].sort((a, b) => a.name.localeCompare(b.name)) 
+          : [optimisticProduct];
       });
-      
-      toast.success("Produto cadastrado!");
+
       setName('');
       setPrice('');
-      setMinQty('1'); 
-      fetchProducts();
-    } catch (error) {
-      console.error(error);
-      toast.error("Erro ao criar.");
-    }
-  }
+      setMinQty('1');
+      toast.success("Produto cadastrado!");
 
-  function handleDelete(id) {
-    if(confirm("Excluir este produto do catálogo?")) {
-        confirmDelete(id);
-    }
-  }
+      return { previousProducts };
+    },
 
-  async function confirmDelete(id) {
-    try {
-      await api.delete(`/products/${id}/`);
-      toast.success("Excluído.", { icon: '🗑️' });
-      fetchProducts();
-    } catch (error) {
-      toast.error("Erro ao excluir (pode estar em uso).");
-    }
-  }
+    onError: (err, newProduct, context) => {
+      toast.error("Sem conexão. Produto salvo localmente.", { icon: <WifiOff size={18}/> });
+      console.warn("Erro ao criar produto (Offline):", err);
+    },
 
-  // Helper de incremento
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+    }
+  });
+
+  // --- 3. MUTAÇÃO DE EXCLUSÃO ---
+  const deleteMutation = useMutation({
+    mutationFn: (id) => api.delete(`/products/${id}/`),
+    onMutate: async (id) => {
+        await queryClient.cancelQueries({ queryKey: ['products'] });
+        const previousProducts = queryClient.getQueryData(['products']);
+        queryClient.setQueryData(['products'], old => old.filter(p => p.id !== id));
+        return { previousProducts };
+    },
+    onError: (err, id, context) => {
+        queryClient.setQueryData(['products'], context.previousProducts);
+        toast.error("Erro ao excluir produto.");
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['products'] }),
+    onSuccess: () => toast.success("Excluído.", { icon: '🗑️' })
+  });
+
+  // --- HANDLERS ---
+
+  const handleCreate = (e) => {
+    e.preventDefault();
+    if (!name) return toast.error("Nome é obrigatório");
+
+    const finalPrice = price ? (typeof price === 'string' ? parseFloat(price.replace(',', '.')) : price) : 0;
+
+    createMutation.mutate({ 
+        name, 
+        measure_unit: unit,
+        estimated_price: finalPrice,
+        min_quantity: parseFloat(minQty) || 1 
+    });
+  };
+
+  const handleDelete = (id) => {
+    // Se for temporário, remove sem perguntar (menos atrito)
+    if (String(id).startsWith('temp-')) {
+        queryClient.setQueryData(['products'], old => old.filter(p => p.id !== id));
+        toast.success("Removido.");
+        return;
+    }
+
+    // CORREÇÃO: TOAST CUSTOMIZADO DE CONFIRMAÇÃO
+    toast((t) => (
+      <div className="flex flex-col gap-3 min-w-[240px]">
+        <div className="flex items-start gap-3">
+            <div className="bg-red-100 p-2 rounded-full text-red-500"><Trash2 size={20}/></div>
+            <div>
+                <p className="font-bold text-gray-800 text-sm">Excluir Produto?</p>
+                <p className="text-xs text-gray-500 mt-1">Isso removerá "{products.find(p => p.id === id)?.name}" do catálogo permanentemente.</p>
+            </div>
+        </div>
+        <div className="flex gap-2 mt-1">
+          <button 
+            onClick={() => toast.dismiss(t.id)}
+            className="flex-1 px-3 py-2 text-xs font-bold text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+          >
+            Cancelar
+          </button>
+          <button 
+            onClick={() => {
+              deleteMutation.mutate(id);
+              toast.dismiss(t.id);
+            }}
+            className="flex-1 px-3 py-2 text-xs font-bold text-white bg-red-500 rounded-lg hover:bg-red-600 transition shadow-sm shadow-red-200"
+          >
+            Sim, Excluir
+          </button>
+        </div>
+      </div>
+    ), { 
+        duration: 5000, 
+        position: 'top-center',
+        style: { padding: '12px', borderRadius: '16px' }
+    });
+  };
+
   const handleStep = (delta) => {
     const val = parseFloat(minQty) || 0;
     const newVal = val + delta;
@@ -179,26 +246,34 @@ export default function ProductManager({ onBack }) {
                     </div>
                 </div>
 
-                <button type="submit" className="w-full h-[50px] flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded-xl transition shadow-sm active:scale-95">
-                    <Plus size={20} /> Cadastrar Produto
+                <button 
+                    type="submit" 
+                    disabled={createMutation.isPending}
+                    className={`w-full h-[50px] flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded-xl transition shadow-sm active:scale-95 ${createMutation.isPending ? 'opacity-70 cursor-not-allowed' : ''}`}
+                >
+                    <Plus size={20} /> 
+                    {createMutation.isPending ? 'Salvando...' : 'Cadastrar Produto'}
                 </button>
             </form>
         </div>
 
         {/* Lista de Produtos Existentes */}
         <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1 scroll-smooth">
-            {products.length === 0 && !loading && (
+            {products.length === 0 && !isLoading && (
                 <p className="text-center text-gray-400 text-xs py-4">Nenhum produto no catálogo.</p>
             )}
             
             {products.map(prod => (
-                <div key={prod.id} className="flex items-center justify-between p-3 bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-lg group hover:border-teal-200 dark:hover:border-teal-800 transition-colors">
+                <div key={prod.id} className={`flex items-center justify-between p-3 bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-lg group hover:border-teal-200 dark:hover:border-teal-800 transition-colors ${String(prod.id).startsWith('temp') ? 'opacity-70' : ''}`}>
                     <div className="flex items-center gap-3">
                         <div className="p-2 rounded-full bg-teal-50 dark:bg-teal-900/20 text-teal-600 dark:text-teal-400">
                             <Package size={18} />
                         </div>
                         <div>
-                            <p className="text-gray-800 dark:text-gray-200 font-bold text-sm">{prod.name}</p>
+                            <p className="text-gray-800 dark:text-gray-200 font-bold text-sm">
+                                {prod.name}
+                                {String(prod.id).startsWith('temp') && <span className="ml-2 text-[9px] text-orange-500 bg-orange-100 px-1 rounded border border-orange-200">OFFLINE</span>}
+                            </p>
                             <p className="text-[10px] text-gray-500 flex gap-2">
                                 <span>Mín: <b>{prod.min_quantity} {prod.measure_unit}</b></span>
                                 <span>•</span>

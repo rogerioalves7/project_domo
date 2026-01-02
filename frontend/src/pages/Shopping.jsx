@@ -7,7 +7,7 @@ import Modal from '../components/Modal';
 import ProductManager from '../components/ProductManager';
 import MoneyInput from '../components/MoneyInput';
 import { 
-  ShoppingCart, Check, Trash2, Plus, Minus, RefreshCw, CheckCircle, Wallet, CreditCard 
+  ShoppingCart, Check, Trash2, Plus, Minus, RefreshCw, CheckCircle, Wallet, CreditCard, WifiOff, AlertTriangle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -22,61 +22,144 @@ export default function Shopping() {
   // --- 1. LEITURA DE DADOS ---
   const { data: items = [], isLoading: loadingList, isRefetching } = useQuery({
     queryKey: ['shopping-list'],
-    queryFn: async () => {
-      const { data } = await api.get('/shopping-list/');
-      return data;
-    },
+    queryFn: async () => (await api.get('/shopping-list/')).data,
+    staleTime: 1000 * 60 * 5, 
+  });
+
+  const { data: products = [] } = useQuery({ 
+    queryKey: ['products'], 
+    queryFn: () => api.get('/products/').then(res => res.data),
+    staleTime: 1000 * 60 * 60 
   });
 
   const { data: accounts = [] } = useQuery({
     queryKey: ['accounts'],
-    queryFn: async () => {
-      const { data } = await api.get('/accounts/');
-      return data;
-    }
+    queryFn: async () => (await api.get('/accounts/')).data,
+    staleTime: 1000 * 60 * 30,
   });
 
   const { data: cards = [] } = useQuery({
     queryKey: ['credit-cards'],
-    queryFn: async () => {
-      const { data } = await api.get('/credit-cards/');
-      return data;
+    queryFn: async () => (await api.get('/credit-cards/')).data,
+    staleTime: 1000 * 60 * 30,
+  });
+
+  // --- 2. CÁLCULOS ---
+  const totals = useMemo(() => {
+    return items.reduce((acc, item) => {
+        const qty = parseFloat(item?.quantity_to_buy || 0);
+        const estUnit = parseFloat(item?.estimated_price || 0);
+        
+        acc.estimated += estUnit * qty;
+
+        if (item?.is_purchased) {
+            const realUnit = parseFloat(item?.real_unit_price || 0);
+            const discUnit = parseFloat(item?.discount_unit_price || 0);
+            
+            const finalReal = realUnit > 0 ? realUnit : estUnit;
+            const finalDisc = discUnit > 0 ? discUnit : finalReal;
+            
+            acc.real += finalReal * qty;
+            acc.discount += finalDisc * qty;
+        }
+        return acc;
+    }, { estimated: 0, real: 0, discount: 0 });
+  }, [items]);
+
+  // --- 3. MUTAÇÕES ---
+
+  // ADICIONAR ITEM (COM SYNC DE ESTADO)
+  const addMutation = useMutation({
+    mutationFn: (payload) => {
+        // Remove ID temporário antes de enviar
+        const { tempId, ...dataToSend } = payload;
+
+        if (String(payload.product).startsWith('temp-')) {
+             return api.post('/shopping-list/', { 
+                 create_product_name: payload.product_name, 
+                 quantity_to_buy: payload.quantity_to_buy 
+             });
+        }
+        return api.post('/shopping-list/', dataToSend);
+    },
+    retry: 3,
+    onMutate: async (newItemPayload) => {
+        await queryClient.cancelQueries({ queryKey: ['shopping-list'] });
+        const previousItems = queryClient.getQueryData(['shopping-list']);
+
+        const productData = products.find(p => p.id == newItemPayload.product);
+        const productName = productData ? productData.name : newItemPayload.product_name || "Item Novo";
+        const estPrice = productData ? productData.estimated_price : 0;
+
+        // Usa o tempId gerado no handler ou gera um novo
+        const tempId = newItemPayload.tempId || 'temp-' + Math.random();
+
+        const optimisticItem = {
+            id: tempId,
+            product: newItemPayload.product,
+            product_name: productName,
+            quantity_to_buy: newItemPayload.quantity_to_buy,
+            estimated_price: estPrice,
+            is_purchased: false,
+            real_unit_price: 0,
+            discount_unit_price: 0,
+            is_offline: true
+        };
+
+        queryClient.setQueryData(['shopping-list'], old => [...(old || []), optimisticItem]);
+        setIsModalOpen(false);
+        toast.success("Adicionado à lista!");
+        
+        return { previousItems };
+    },
+    onError: (err, newItem, context) => {
+        toast.error("Sem conexão. Salvo localmente.", { icon: <WifiOff size={18}/> });
+    },
+    // SUCESSO: AQUI É A MÁGICA DA SINCRONIZAÇÃO
+    onSuccess: async (response, variables) => {
+        const newItem = response.data; // O item "virgem" que veio do servidor
+        const tempId = variables.tempId; // O ID temporário que estava na tela
+
+        // Busca o estado ATUAL do item na tela (pode ter sido checkado offline)
+        const currentList = queryClient.getQueryData(['shopping-list']);
+        const localItem = currentList?.find(i => i.id === tempId);
+
+        if (localItem) {
+            // Verifica se o usuário mexeu no item enquanto estava offline
+            const updates = {};
+            if (localItem.is_purchased) updates.is_purchased = true;
+            if (Number(localItem.real_unit_price) > 0) updates.real_unit_price = localItem.real_unit_price;
+            if (Number(localItem.discount_unit_price) > 0) updates.discount_unit_price = localItem.discount_unit_price;
+            if (Number(localItem.quantity_to_buy) !== Number(newItem.quantity_to_buy)) updates.quantity_to_buy = localItem.quantity_to_buy;
+
+            // Se houve alterações offline, envia elas AGORA para o servidor
+            if (Object.keys(updates).length > 0) {
+                try {
+                    await api.patch(`/shopping-list/${newItem.id}/`, updates);
+                    // Atualiza o objeto newItem com as alterações para atualizar o cache corretamente
+                    Object.assign(newItem, updates);
+                } catch (e) {
+                    console.error("Erro ao sincronizar edições offline", e);
+                }
+            }
+
+            // Substitui o item temporário pelo item real (já atualizado) no cache
+            queryClient.setQueryData(['shopping-list'], old => 
+                old.map(i => i.id === tempId ? newItem : i)
+            );
+        }
+        
+        // Garante que tudo está limpo
+        queryClient.invalidateQueries({ queryKey: ['shopping-list'] });
     }
   });
 
-  const loading = loadingList;
-
-  // --- 2. CÁLCULOS ---
-  const { totalEstimated, totalReal, totalDiscount } = useMemo(() => {
-    let est = 0;
-    let real = 0;
-    let disc = 0;
-
-    items.forEach(item => {
-        const qty = parseFloat(item?.quantity_to_buy || 0);
-        const estUnit = parseFloat(item?.estimated_price || 0);
-        const realUnit = parseFloat(item?.real_unit_price || 0);
-        const discUnit = parseFloat(item?.discount_unit_price || 0);
-
-        est += estUnit * qty;
-
-        if (item?.is_purchased) {
-            const finalRealPrice = realUnit > 0 ? realUnit : estUnit;
-            const finalDiscPrice = discUnit > 0 ? discUnit : finalRealPrice;
-            
-            real += finalRealPrice * qty;
-            disc += finalDiscPrice * qty;
-        }
-    });
-
-    return { totalEstimated: est, totalReal: real, totalDiscount: disc };
-  }, [items]);
-
-  // --- 3. MUTAÇÕES DE ITENS (Passo 2 - Já implementado) ---
+  // ATUALIZAR ITEM
   const updateMutation = useMutation({
     mutationFn: ({ id, field, value }) => api.patch(`/shopping-list/${id}/`, { [field]: value }),
     retry: 3,
     onMutate: async ({ id, field, value }) => {
+        if (String(id).startsWith('temp-')) return;
         await queryClient.cancelQueries({ queryKey: ['shopping-list'] });
         const previousItems = queryClient.getQueryData(['shopping-list']);
         queryClient.setQueryData(['shopping-list'], old => 
@@ -84,13 +167,11 @@ export default function Shopping() {
         );
         return { previousItems };
     },
-    onError: (err, newTodo, context) => {
-        queryClient.setQueryData(['shopping-list'], context.previousItems);
-        toast.error("Erro ao sincronizar item.");
-    },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['shopping-list'] }); }
+    onError: () => toast.error("Alteração pendente de conexão.", { icon: <WifiOff size={18}/> }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['shopping-list'] })
   });
 
+  // REMOVER ITEM
   const deleteMutation = useMutation({
     mutationFn: (id) => api.delete(`/shopping-list/${id}/`),
     retry: 3,
@@ -100,144 +181,81 @@ export default function Shopping() {
         queryClient.setQueryData(['shopping-list'], old => old.filter(item => item.id !== id));
         return { previousItems };
     },
-    onError: (err, id, context) => {
-        queryClient.setQueryData(['shopping-list'], context.previousItems);
-        toast.error("Erro ao remover item.");
-    },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['shopping-list'] }); }
+    onError: () => toast.error("Erro ao sincronizar remoção.", { icon: <AlertTriangle size={18}/> }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['shopping-list'] })
   });
 
-  const addMutation = useMutation({
-    mutationFn: (payload) => api.post('/shopping-list/', payload),
-    retry: 3,
-    onMutate: async (newItemPayload) => {
-        await queryClient.cancelQueries({ queryKey: ['shopping-list'] });
-        const previousItems = queryClient.getQueryData(['shopping-list']);
-
-        const cachedProducts = queryClient.getQueryData(['products']); 
-        const productData = cachedProducts?.find(p => p.id == newItemPayload.product);
-        const productName = productData ? productData.name : "Novo Item";
-        const estPrice = productData ? productData.estimated_price : 0;
-
-        const optimisticItem = {
-            id: 'temp-' + Math.random(),
-            product: newItemPayload.product,
-            product_name: productName,
-            quantity_to_buy: newItemPayload.quantity_to_buy,
-            estimated_price: estPrice,
-            is_purchased: false,
-            real_unit_price: 0,
-            discount_unit_price: 0
-        };
-
-        queryClient.setQueryData(['shopping-list'], old => [...(old || []), optimisticItem]);
-        setIsModalOpen(false);
-        toast.success("Adicionado!");
-        return { previousItems };
-    },
-    onError: (err, newItem, context) => {
-        queryClient.setQueryData(['shopping-list'], context.previousItems);
-        toast.error("Erro ao adicionar item.");
-    },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['shopping-list'] }); }
-  });
-
-  // --- 4. MUTAÇÃO DE FINALIZAR COMPRA (PASSO 3 - A NOVIDADE) ---
+  // FINALIZAR COMPRA
   const finishMutation = useMutation({
     mutationFn: (payload) => api.post('/shopping-list/finish/', payload),
-    
-    // Tenta 3x se der erro 500 (banco fora). Se offline, pausa.
-    retry: 3, 
-    
+    retry: 3,
     onMutate: async (payload) => {
-        // 1. Cancela concorrência
-        await queryClient.cancelQueries({ queryKey: ['shopping-list'] });
-        await queryClient.cancelQueries({ queryKey: ['accounts'] });
-        await queryClient.cancelQueries({ queryKey: ['credit-cards'] });
-
-        // 2. Snapshots para rollback
+        await queryClient.cancelQueries();
         const prevList = queryClient.getQueryData(['shopping-list']);
-        const prevAccounts = queryClient.getQueryData(['accounts']);
-        const prevCards = queryClient.getQueryData(['credit-cards']);
-
-        // 3. Atualiza Lista (Remove comprados)
         queryClient.setQueryData(['shopping-list'], old => old.filter(item => !item.is_purchased));
-
-        // 4. Atualiza Saldo ou Limite (Otimista)
-        const valueToDeduct = Number(payload.total_value);
-
-        if (payload.payment_method === 'ACCOUNT') {
-            queryClient.setQueryData(['accounts'], old => old.map(acc => {
-                if (acc.id === payload.source_id) {
-                    return { ...acc, balance: Number(acc.balance) - valueToDeduct };
-                }
-                return acc;
-            }));
-        } else if (payload.payment_method === 'CREDIT_CARD') {
-            queryClient.setQueryData(['credit-cards'], old => old.map(card => {
-                if (card.id === payload.source_id) {
-                    return { ...card, limit_available: Number(card.limit_available) - valueToDeduct };
-                }
-                return card;
-            }));
-        }
-
         setIsModalOpen(false);
-        toast.success("Compra finalizada! (Sincronizando...)");
-
-        return { prevList, prevAccounts, prevCards };
+        toast.success("Compra finalizada!");
+        return { prevList };
     },
-    onError: (err, payload, context) => {
-        // Rollback se falhar definitivamente
-        queryClient.setQueryData(['shopping-list'], context.prevList);
-        queryClient.setQueryData(['accounts'], context.prevAccounts);
-        queryClient.setQueryData(['credit-cards'], context.prevCards);
-        toast.error("Falha ao finalizar compra. Tente novamente.");
+    onError: (err, payload, ctx) => {
+        queryClient.setQueryData(['shopping-list'], ctx.prevList);
+        toast.error("Falha ao finalizar. Tente novamente.");
     },
-    onSettled: () => {
-        // Garante integridade final
-        queryClient.invalidateQueries({ queryKey: ['shopping-list'] });
-        queryClient.invalidateQueries({ queryKey: ['accounts'] });
-        queryClient.invalidateQueries({ queryKey: ['credit-cards'] });
-        queryClient.invalidateQueries({ queryKey: ['inventory'] });
-        queryClient.invalidateQueries({ queryKey: ['transactions'] }); // Histórico muda tb
-    }
+    onSettled: () => queryClient.invalidateQueries()
   });
 
   // --- HANDLERS ---
-  function handleUpdateItem(id, field, value) { updateMutation.mutate({ id, field, value }); }
-  function handleDeleteItem(id) { if (window.confirm("Remover item?")) deleteMutation.mutate(id); }
-  function handleAddItem(productId) { addMutation.mutate({ product: productId, quantity_to_buy: 1 }); }
-
-  function openPaymentModal() {
-    const purchasedCount = items.filter(i => i.is_purchased).length;
-    if (purchasedCount === 0) return toast.error("Marque itens como comprados.");
+  const handleAddItem = (productId) => {
+    const product = products.find(p => p.id == productId);
+    // Gera ID aqui para poder rastrear depois
+    const tempId = 'temp-' + Date.now();
     
-    if (accounts.length > 0) {
-        setPaymentMethod('ACCOUNT');
-        setSelectedSource(accounts[0].id);
-    } else if (cards.length > 0) {
-        setPaymentMethod('CREDIT_CARD');
-        setSelectedSource(cards[0].id);
-    } else {
-        setPaymentMethod('');
-        setSelectedSource('');
+    addMutation.mutate({ 
+        tempId, // Passamos o ID temporário para a mutação rastrear
+        product: productId, 
+        product_name: product?.name, 
+        quantity_to_buy: 1 
+    });
+  };
+  
+  const handleUpdateItem = (id, field, value) => {
+    if (String(id).startsWith('temp-')) {
+        // Atualiza Cache Local (Offline)
+        queryClient.setQueryData(['shopping-list'], old => 
+            old.map(item => item.id === id ? { ...item, [field]: value } : item)
+        );
+        return;
     }
-    setModalView('PAYMENT_CONFIRM');
-    setIsModalOpen(true);
-  }
+    updateMutation.mutate({ id, field, value });
+  };
 
-  function confirmFinish() {
+  const handleDeleteItem = (id) => {
+    if (String(id).startsWith('temp-')) {
+        queryClient.setQueryData(['shopping-list'], old => old.filter(i => i.id !== id));
+        toast.success("Removido.");
+        return;
+    }
+    if (window.confirm("Remover item?")) deleteMutation.mutate(id);
+  };
+
+  const confirmFinish = () => {
     if (!selectedSource) return toast.error("Selecione onde debitar.");
-
-    // Dispara a mutação otimista
     finishMutation.mutate({
         payment_method: paymentMethod,
         source_id: selectedSource,
-        total_value: totalDiscount > 0 ? totalDiscount : totalReal,
+        total_value: totals.discount > 0 ? totals.discount : totals.real,
         date: new Date().toISOString().split('T')[0]
     });
-  }
+  };
+
+  const openPaymentModal = () => {
+    if (!items.some(i => i.is_purchased)) return toast.error("Nenhum item marcado.");
+    if (accounts.length) { setPaymentMethod('ACCOUNT'); setSelectedSource(accounts[0].id); }
+    else if (cards.length) { setPaymentMethod('CREDIT_CARD'); setSelectedSource(cards[0].id); }
+    else { setPaymentMethod(''); setSelectedSource(''); }
+    setModalView('PAYMENT_CONFIRM');
+    setIsModalOpen(true);
+  };
 
   return (
     <div className="flex w-screen h-screen overflow-hidden font-sans bg-gray-50 dark:bg-[#0F172A] dark:text-gray-100">
@@ -262,15 +280,15 @@ export default function Shopping() {
                 <div className="grid grid-cols-3 gap-2 md:gap-3 mb-2">
                     <div className="bg-white dark:bg-slate-800 p-3 rounded-xl border border-gray-100 dark:border-slate-700 shadow-sm">
                         <p className="text-[9px] md:text-[10px] text-gray-400 uppercase font-bold truncate">Estimado</p>
-                        <p className="text-sm md:text-lg font-bold text-gray-700 dark:text-gray-300 truncate">R$ {totalEstimated.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+                        <p className="text-sm md:text-lg font-bold text-gray-700 dark:text-gray-300 truncate">R$ {totals.estimated.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
                     </div>
                     <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-xl border border-blue-100 dark:border-blue-800 shadow-sm">
                         <p className="text-[9px] md:text-[10px] text-blue-400 uppercase font-bold truncate">Carrinho</p>
-                        <p className="text-sm md:text-lg font-bold text-blue-600 dark:text-blue-400 truncate">R$ {totalReal.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+                        <p className="text-sm md:text-lg font-bold text-blue-600 dark:text-blue-400 truncate">R$ {totals.real.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
                     </div>
                     <div className="bg-emerald-50 dark:bg-emerald-900/20 p-3 rounded-xl border border-emerald-100 dark:border-emerald-800 shadow-sm">
                         <p className="text-[9px] md:text-[10px] text-emerald-500 uppercase font-bold truncate">Final</p>
-                        <p className="text-sm md:text-lg font-bold text-emerald-600 dark:text-emerald-400 truncate">R$ {totalDiscount.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+                        <p className="text-sm md:text-lg font-bold text-emerald-600 dark:text-emerald-400 truncate">R$ {totals.discount.toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
                     </div>
                 </div>
             </header>
@@ -278,15 +296,17 @@ export default function Shopping() {
             <main className="px-4 md:px-8 pb-32 md:pb-10">
                 <div className="space-y-4">
                     {items.map(item => (
-                        <div key={item.id} className={`flex flex-col gap-3 md:gap-4 p-4 rounded-2xl border transition-all shadow-sm ${item.is_purchased ? 'bg-emerald-50/50 border-emerald-200 dark:bg-emerald-900/10 dark:border-emerald-900/30' : 'bg-white dark:bg-[#1E293B] border-gray-100 dark:border-slate-700'}`}>
-                            
+                        <div key={item.id} className={`flex flex-col gap-3 md:gap-4 p-4 rounded-2xl border transition-all shadow-sm ${item.is_purchased ? 'bg-emerald-50/50 border-emerald-200 dark:bg-emerald-900/10 dark:border-emerald-900/30' : 'bg-white dark:bg-[#1E293B] border-gray-100 dark:border-slate-700'} ${String(item.id).startsWith('temp') ? 'opacity-70 border-dashed border-orange-300' : ''}`}>
                             <div className="flex items-center justify-between gap-3">
                                 <div className="flex items-center gap-3 overflow-hidden">
                                     <button onClick={() => handleUpdateItem(item.id, 'is_purchased', !item.is_purchased)} className={`w-8 h-8 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${item.is_purchased ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 text-transparent hover:border-emerald-400 dark:border-slate-500'}`}>
                                         <Check size={16} strokeWidth={3} />
                                     </button>
                                     <div className="min-w-0">
-                                        <p className={`font-bold text-base md:text-lg truncate ${item.is_purchased ? 'text-emerald-700 dark:text-emerald-400 line-through decoration-emerald-500/50' : 'text-gray-800 dark:text-gray-200'}`}>{item.product_name}</p>
+                                        <p className={`font-bold text-base md:text-lg truncate ${item.is_purchased ? 'text-emerald-700 dark:text-emerald-400 line-through decoration-emerald-500/50' : 'text-gray-800 dark:text-gray-200'}`}>
+                                            {item.product_name} 
+                                            {String(item.id).startsWith('temp') && <span className="ml-2 text-[9px] text-orange-600 bg-orange-100 px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider">Offline</span>}
+                                        </p>
                                         <p className="text-[10px] md:text-xs text-gray-400">Est. Unit: R$ {Number(item.estimated_price).toFixed(2)}</p>
                                     </div>
                                 </div>
@@ -308,7 +328,7 @@ export default function Shopping() {
                         </div>
                     ))}
                 </div>
-                {(!items || items.length === 0) && !loading && (
+                {(!items || items.length === 0) && !loadingList && (
                     <div className="text-center py-10 text-gray-400">
                         <ShoppingCart size={48} className="mx-auto mb-3 opacity-50" />
                         <p>Lista de compras vazia.</p>
@@ -327,13 +347,13 @@ export default function Shopping() {
       </div>
       <MobileMenu />
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={modalView === 'PAYMENT_CONFIRM' ? "Pagamento" : "Adicionar à Lista"}>
-        {modalView === 'PRODUCT_SELECT' && <ManualAddForm onAdd={handleAddItem} onCreateNew={() => setModalView('CREATE_PRODUCT')} />}
+        {modalView === 'PRODUCT_SELECT' && <ManualAddForm onAdd={handleAddItem} onCreateNew={() => setModalView('CREATE_PRODUCT')} products={products} />}
         {modalView === 'CREATE_PRODUCT' && <ProductManager onBack={() => setModalView('PRODUCT_SELECT')} />}
         {modalView === 'PAYMENT_CONFIRM' && (
             <div className="space-y-6">
                 <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-xl border border-emerald-100 dark:border-emerald-800 text-center">
                     <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Valor Total da Compra</p>
-                    <p className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">R$ {(totalDiscount > 0 ? totalDiscount : totalReal).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
+                    <p className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">R$ {(totals.discount > 0 ? totals.discount : totals.real).toLocaleString('pt-BR', {minimumFractionDigits: 2})}</p>
                 </div>
                 <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Método de Pagamento</label>
@@ -357,12 +377,14 @@ export default function Shopping() {
   );
 }
 
-function ManualAddForm({ onAdd, onCreateNew }) {
+function ManualAddForm({ onAdd, onCreateNew, products }) {
     const [selected, setSelected] = useState('');
-    const { data: products = [] } = useQuery({ queryKey: ['products'], queryFn: () => api.get('/products/').then(res => res.data) });
     return (
         <div className="space-y-4">
-            <select className="w-full p-3 rounded-xl bg-gray-50 border dark:bg-slate-800 dark:border-slate-700 dark:text-white" value={selected} onChange={e => setSelected(e.target.value)}><option value="">Selecione um produto...</option>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+            <select className="w-full p-3 rounded-xl bg-gray-50 border dark:bg-slate-800 dark:border-slate-700 dark:text-white" value={selected} onChange={e => setSelected(e.target.value)}>
+                <option value="">Selecione um produto...</option>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
             <button onClick={() => selected && onAdd(selected)} className="w-full bg-teal-600 text-white p-3 rounded-xl font-bold">Adicionar</button>
             <div className="text-center pt-2"><button onClick={onCreateNew} className="text-sm text-teal-600 underline">Cadastrar novo produto</button></div>
         </div>
