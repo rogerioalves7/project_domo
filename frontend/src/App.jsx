@@ -3,7 +3,7 @@ import { Toaster } from 'react-hot-toast';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Inventory from './pages/Inventory';
-import Shopping from './pages/Shopping'; // Certifique-se que está importado
+import Shopping from './pages/Shopping';
 import History from './pages/History';
 import AcceptInvite from './pages/AcceptInvite';
 import Settings from './pages/Settings';
@@ -11,14 +11,14 @@ import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import { AuthProvider, AuthContext } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
-import { useContext } from 'react';
-import { Loader2 } from 'lucide-react'; // Ícone de loading
+// 1. ADICIONADO: Importar useEffect aqui
+import { useContext, useEffect } from 'react';
+import { Loader2 } from 'lucide-react';
 
 // --- COMPONENTE DE ROTA PRIVADA BLINDADO ---
 const PrivateRoute = ({ children }) => {
   const { signed, loading } = useContext(AuthContext);
 
-  // 1. Se estiver carregando o localStorage, mostra tela de espera
   if (loading) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-gray-50 dark:bg-[#0F172A]">
@@ -30,16 +30,33 @@ const PrivateRoute = ({ children }) => {
     );
   }
 
-  // 2. Se terminou de carregar e NÃO tem usuário, vai pro Login
   if (!signed) {
     return <Navigate to="/login" />;
   }
 
-  // 3. Se tem usuário, libera o acesso
   return children;
 };
 
 function App() {
+  // 2. ADICIONADO: Lógica para injetar o Favicon e Título
+  useEffect(() => {
+    // Tenta achar o link do favicon existente
+    let link = document.querySelector("link[rel~='icon']");
+    
+    // Se não existir, cria um novo
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.getElementsByTagName('head')[0].appendChild(link);
+    }
+    
+    // Define a imagem (Certifique-se que favicon.png está na pasta 'public')
+    link.href = '../public/domo.svg';
+    
+    // Define o título da aba
+    document.title = "Domo - Gestão Financeira";
+  }, []);
+
   return (
     <AuthProvider>
       <ThemeProvider>
