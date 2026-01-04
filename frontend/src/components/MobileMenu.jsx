@@ -15,7 +15,7 @@ export default function MobileMenu() {
 
   return (
     <nav className="fixed bottom-0 left-0 w-full pb-safe pt-2 z-50 border-t transition-colors md:hidden bg-white border-gray-200 dark:bg-[#1E293B] dark:border-slate-800">
-      <div className="flex justify-between items-center px-6 h-16 w-full max-w-md mx-auto">
+      <div className="grid grid-cols-6 justify-items-center items-center h-16 w-full max-w-md mx-auto">
           
           <NavLink to="/app" className={linkClass}>
             <Home size={22} />
