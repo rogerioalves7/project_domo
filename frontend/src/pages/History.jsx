@@ -121,9 +121,9 @@ export default function History() {
                     </p>
                 </div>
                 <div className="flex items-center gap-1 bg-white dark:bg-slate-800 p-1 rounded-xl border border-gray-200 dark:border-slate-700 shadow-sm overflow-x-auto">
-                    <button onClick={() => setFilterPeriod('MONTH')} className={`px-4 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${filterPeriod === 'MONTH' ? 'bg-teal-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-slate-700'}`}>Este Mês</button>
-                    <button onClick={() => setFilterPeriod('YEAR')} className={`px-4 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${filterPeriod === 'YEAR' ? 'bg-teal-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-slate-700'}`}>Este Ano</button>
-                    <button onClick={() => setFilterPeriod('ALL')} className={`px-4 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${filterPeriod === 'ALL' ? 'bg-teal-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-50 dark:hover:bg-slate-700'}`}>Tudo</button>
+                    <button onClick={() => setFilterPeriod('MONTH')} className={`px-4 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${filterPeriod === 'MONTH' ? 'bg-teal-600 text-white shadow-md' : 'bg-white dark:bg-[#1E293B] text-gray-500 hover:bg-gray-50 dark:hover:bg-slate-700'}`}>Este Mês</button>
+                    <button onClick={() => setFilterPeriod('YEAR')} className={`px-4 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${filterPeriod === 'YEAR' ? 'bg-teal-600 text-white shadow-md' : 'bg-white dark:bg-[#1E293B] text-gray-500 hover:bg-gray-50 dark:hover:bg-slate-700'}`}>Este Ano</button>
+                    <button onClick={() => setFilterPeriod('ALL')} className={`px-4 py-2 rounded-lg text-xs font-bold transition whitespace-nowrap ${filterPeriod === 'ALL' ? 'bg-teal-600 text-white shadow-md' : 'bg-white dark:bg-[#1E293B] text-gray-500 hover:bg-gray-50 dark:hover:bg-slate-700'}`}>Tudo</button>
                 </div>
             </header>
 

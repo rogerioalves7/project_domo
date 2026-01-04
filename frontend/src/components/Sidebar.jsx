@@ -2,14 +2,16 @@ import { useContext } from 'react';
 import { NavLink } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import { usePrivacy } from '../context/PrivacyContext'; // <--- Importação do Contexto
+import { useTheme } from '../context/ThemeContext';
 import logoImg from '../assets/logo.png';
 import { 
-  Home, BarChart3, Box, ShoppingCart, Settings, LogOut, Eye, EyeOff 
+  Home, BarChart3, Box, ShoppingCart, Settings, LogOut, Eye, EyeOff, Sun, Moon
 } from 'lucide-react';
 
 export default function Sidebar() {
   const { signOut } = useContext(AuthContext);
   const { isPrivacyEnabled, togglePrivacy } = usePrivacy(); // <--- Uso do Hook
+  const { theme, toggleTheme } = useTheme();
 
   const navItems = [
     { icon: Home, label: 'Início', path: '/app' },
@@ -61,10 +63,19 @@ export default function Sidebar() {
       {/* FOOTER (Privacidade e Logout) */}
       <div className="p-4 border-t border-gray-100 dark:border-slate-800 shrink-0 space-y-2">
         
+        {/* BOTÃO TEMA */}
+        <button 
+          onClick={toggleTheme}
+          className="bg-white dark:bg-[#1E293B] flex items-center w-full px-4 py-3 text-gray-500 hover:bg-gray-50 hover:text-gray-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200 rounded-xl transition-colors font-medium"
+        >
+          {theme === 'dark' ? <Sun size={20} className="mr-3" /> : <Moon size={20} className="mr-3" />}
+          {theme === 'dark' ? 'Modo Claro' : 'Modo Escuro'}
+        </button>
+
         {/* BOTÃO OLHO MÁGICO (NOVO) */}
         <button 
           onClick={togglePrivacy}
-          className="flex items-center w-full px-4 py-3 text-gray-600 hover:bg-gray-100 dark:text-slate-300 dark:hover:bg-slate-800 rounded-xl transition-colors font-medium"
+          className="flex items-center w-full px-4 py-3 bg-white dark:bg-[#1E293B] text-gray-600 hover:bg-gray-100 dark:text-slate-300 dark:hover:bg-slate-800 rounded-xl transition-colors font-medium"
         >
           {isPrivacyEnabled ? (
              <EyeOff size={20} className="mr-3 text-gray-400" />
@@ -77,7 +88,7 @@ export default function Sidebar() {
         {/* BOTÃO SAIR */}
         <button 
           onClick={signOut}
-          className="flex items-center w-full px-4 py-3 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/10 rounded-xl transition-colors font-medium"
+          className="flex items-center w-full px-4 py-3 bg-white dark:bg-[#1E293B] text-red-500 hover:bg-red-50 dark:hover:bg-red-900/10 rounded-xl transition-colors font-medium"
         >
           <LogOut size={20} className="mr-3" />
           Sair do Sistema

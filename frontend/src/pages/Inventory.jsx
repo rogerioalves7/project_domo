@@ -144,7 +144,7 @@ export default function Inventory() {
                                     {/* Botão MENOS */}
                                     <button 
                                         onClick={() => updateQuantity(item, parseFloat(item.quantity) - 1)} 
-                                        className="h-full px-4 flex items-center justify-center text-gray-500 hover:text-gray-700 hover:bg-gray-200 dark:text-gray-400 dark:hover:bg-slate-700 transition-colors"
+                                        className="bg-white dark:bg-[#1E293B] h-full px-4 flex items-center justify-center text-gray-500 hover:text-gray-700 hover:bg-gray-200 dark:text-gray-400 dark:hover:bg-slate-700 transition-colors"
                                     >
                                         <Minus size={18} strokeWidth={3} />
                                     </button>
@@ -162,7 +162,7 @@ export default function Inventory() {
                                     {/* Botão MAIS */}
                                     <button 
                                         onClick={() => updateQuantity(item, parseFloat(item.quantity) + 1)} 
-                                        className="h-full px-4 flex items-center justify-center text-teal-600 hover:text-teal-800 hover:bg-teal-100 dark:text-teal-400 dark:hover:bg-teal-900/30 transition-colors"
+                                        className="bg-white dark:bg-[#1E293B] h-full px-4 flex items-center justify-center text-teal-600 hover:text-teal-800 hover:bg-teal-100 dark:text-teal-400 dark:hover:bg-teal-900/30 transition-colors"
                                     >
                                         <Plus size={18} strokeWidth={3} />
                                     </button>

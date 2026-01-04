@@ -429,14 +429,14 @@ export default function Dashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     {/* CONTAS LISTA */}
                     <div>
-                        <div className="flex justify-between items-center mb-4 px-1"><h2 className="font-bold text-gray-700 dark:text-gray-300">Minhas Contas</h2><button onClick={() => { setEditingItem(null); setModalView('ACCOUNT'); setIsModalOpen(true); }} className="text-teal-600 text-xs font-bold hover:underline">+ Adicionar</button></div>
+                        <div className="flex justify-between items-center mb-4 px-1"><h2 className="font-bold text-gray-700 dark:text-gray-300">Minhas Contas</h2><button onClick={() => { setEditingItem(null); setModalView('ACCOUNT'); setIsModalOpen(true); }} className="bg-white dark:bg-[#1E293B] text-teal-600 text-xs font-bold hover:underline">+ Adicionar</button></div>
                         <div className="space-y-3">
                             {loading ? ([1, 2, 3].map(i => (<div key={i} className="p-4 bg-white dark:bg-[#1E293B] border border-gray-100 dark:border-slate-700 rounded-2xl shadow-sm min-h-[85px]"><Skeleton className="h-10 w-full" /></div>))) : (
                                 accounts.map(acc => (
                                     <div key={acc.id} onClick={() => handleEditGeneric(acc, 'ACCOUNT')} className="cursor-pointer flex justify-between items-center p-4 bg-white dark:bg-[#1E293B] border border-gray-100 dark:border-slate-700 rounded-2xl shadow-sm hover:scale-[1.01] transition-transform min-h-[85px]">
                                         <div className="flex items-center gap-3">
                                             <div className={`p-2 rounded-full ${acc.is_shared ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-500'} dark:bg-slate-800`}><Wallet size={18} /></div>
-                                            <div><p className="font-bold text-sm">{acc.name}</p><div className="flex items-center gap-2 mt-0.5"><button onClick={(e) => handleToggleAccountPrivacy(e, acc)} className={`p-1 rounded-md transition-colors ${acc.is_shared ? 'text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-700'}`}>{acc.is_shared ? <Users size={12} /> : <Lock size={12} />}</button></div></div>
+                                            <div><p className="font-bold text-sm">{acc.name}</p><div className="flex items-center gap-2 mt-0.5"><button onClick={(e) => handleToggleAccountPrivacy(e, acc)} className={`p-1 rounded-md transition-colors ${acc.is_shared ? 'bg-white dark:bg-[#1E293B] text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20' : 'bg-white dark:bg-[#1E293B] text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-700'}`}>{acc.is_shared ? <Users size={12} /> : <Lock size={12} />}</button></div></div>
                                         </div>
                                         <span className="font-bold text-gray-800 dark:text-gray-200"><PrivateValue>R$ {Number(acc.balance).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</PrivateValue></span>
                                     </div>
@@ -447,7 +447,7 @@ export default function Dashboard() {
 
                     {/* CARTÕES LISTA (CORRIGIDO LÓGICA DE FATURA E DATA) */}
                     <div>
-                        <div className="flex justify-between items-center mb-4 px-1"><h2 className="font-bold text-gray-700 dark:text-gray-300">Meus Cartões</h2><button onClick={() => { setEditingItem(null); setModalView('CARD'); setIsModalOpen(true); }} className="text-purple-600 text-xs font-bold hover:underline">+ Adicionar</button></div>
+                        <div className="flex justify-between items-center mb-4 px-1"><h2 className="font-bold text-gray-700 dark:text-gray-300">Meus Cartões</h2><button onClick={() => { setEditingItem(null); setModalView('CARD'); setIsModalOpen(true); }} className="bg-white dark:bg-[#1E293B] text-purple-600 text-xs font-bold hover:underline">+ Adicionar</button></div>
                         <div className="space-y-3">
                             {loading ? ([1, 2, 3].map(i => (<div key={i} className="p-4 bg-white dark:bg-[#1E293B] border border-gray-100 dark:border-slate-700 rounded-2xl shadow-sm min-h-[85px]"><Skeleton className="h-10 w-full" /></div>))) : (
                                 cards.map(card => {
@@ -491,7 +491,7 @@ export default function Dashboard() {
                                                 <div>
                                                     <p className="font-bold text-sm text-gray-800 dark:text-gray-200">{card.name}</p>
                                                     <div className="flex items-center gap-2 mt-0.5">
-                                                        <button onClick={(e) => handleToggleCardPrivacy(e, card)} className={`p-1 rounded-md transition-colors ${card.is_shared ? 'text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-700'}`} title={card.is_shared ? "Compartilhado" : "Privado"}>{card.is_shared ? <Users size={12} /> : <Lock size={12} />}</button>
+                                                        <button onClick={(e) => handleToggleCardPrivacy(e, card)} className={`p-1 rounded-md transition-colors ${card.is_shared ? 'bg-white dark:bg-[#1E293B] text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20' : 'bg-white dark:bg-[#1E293B] text-gray-400 hover:bg-gray-100 dark:hover:bg-slate-700'}`} title={card.is_shared ? "Compartilhado" : "Privado"}>{card.is_shared ? <Users size={12} /> : <Lock size={12} />}</button>
                                                         {Number(invoiceVal) > 0 ? (
                                                             <div className="flex items-center gap-2">
                                                                 <div className="flex flex-col leading-tight">
@@ -529,7 +529,7 @@ export default function Dashboard() {
                 {/* RESTO DO DASHBOARD (CONTAS FIXAS / HISTÓRICO) */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <div className="lg:col-span-1">
-                        <div className="flex justify-between items-center mb-4 px-1"><h2 className="font-bold text-gray-700 dark:text-gray-300">Contas Fixas</h2><button onClick={() => { setEditingItem(null); setModalView('RECURRING'); setIsModalOpen(true); }} className="text-orange-600 text-xs font-bold hover:underline">+ Adicionar</button></div>
+                        <div className="flex justify-between items-center mb-4 px-1"><h2 className="font-bold text-gray-700 dark:text-gray-300">Contas Fixas</h2><button onClick={() => { setEditingItem(null); setModalView('RECURRING'); setIsModalOpen(true); }} className="bg-white dark:bg-[#1E293B] text-orange-600 text-xs font-bold hover:underline">+ Adicionar</button></div>
                         <div className="space-y-2">
                             {loading ? ([1, 2, 3].map(i => (<div key={i} className="p-3 bg-white dark:bg-[#1E293B] border border-gray-100 dark:border-slate-700 rounded-xl"><Skeleton className="h-8 w-full"/></div>))) : (
                                 recurringBills.length === 0 ? (<p className="text-center text-gray-400 text-xs py-4 border border-dashed border-gray-200 rounded-xl">Nenhuma conta fixa.</p>) : (

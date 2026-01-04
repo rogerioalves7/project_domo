@@ -1,7 +1,9 @@
 import { NavLink } from 'react-router-dom';
-import { Home, BarChart3, Box, ShoppingCart, Settings } from 'lucide-react';
+import { Home, BarChart3, Box, ShoppingCart, Settings, Sun, Moon } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
 
 export default function MobileMenu() {
+  const { theme, toggleTheme } = useTheme();
   
   // Função auxiliar para classes de estilo ativo/inativo
   const linkClass = ({ isActive }) => 
@@ -35,6 +37,11 @@ export default function MobileMenu() {
             <ShoppingCart size={22} />
             <span className="text-[10px]">Compras</span>
           </NavLink>
+
+          <button onClick={toggleTheme} className="bg-white dark:bg-[#1E293B] flex flex-col items-center space-y-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors duration-200">
+            {theme === 'dark' ? <Sun size={22} /> : <Moon size={22} />}
+            <span className="text-[10px]">Tema</span>
+          </button>
 
           <NavLink to="/settings" className={linkClass}>
             <Settings size={22} />

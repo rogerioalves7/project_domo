@@ -384,8 +384,8 @@ export default function Settings() {
                                         <td className="px-4 py-3 font-medium text-gray-700 dark:text-gray-200">
                                             R$ {Number(bill.base_value).toLocaleString('pt-BR', {minimumFractionDigits: 2})}
                                         </td>
-                                        <td className="px-4 py-3 text-right">
-                                            <button onClick={() => handleEditBill(bill)}>
+                                        <td className="px-4 py-3 text-right bg-white dark:bg-[#1E293B]">
+                                            <button onClick={() => handleEditBill(bill)} className="bg-white dark:bg-[#1E293B]">
                                                 <Edit2 size={16} className="text-gray-400 hover:text-teal-500 transition"/>
                                             </button>
                                         </td>

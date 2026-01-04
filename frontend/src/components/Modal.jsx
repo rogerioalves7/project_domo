@@ -16,7 +16,7 @@ export default function Modal({ isOpen, onClose, title, children }) {
           
           <button 
             onClick={onClose}
-            className="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-500 dark:text-slate-400 transition"
+            className="bg-white dark:bg-[#1E293B] p-1 rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-500 dark:text-slate-400 transition"
           >
             <X size={24} />
           </button>

@@ -92,7 +92,7 @@ export default function NewRecurringBillForm({ initialData, onBack, onSuccess, o
         <div>
             <div className="flex justify-between items-center mb-1 h-6">
                 <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">Categoria</label>
-                <button type="button" onClick={onManageCategories} className="text-[10px] text-teal-600 font-bold hover:underline">Gerenciar</button>
+                <button type="button" onClick={onManageCategories} className="bg-white dark:bg-[#1E293B] text-[10px] text-teal-600 font-bold hover:underline">Gerenciar</button>
             </div>
             <div className="relative h-[46px]">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400"><Tag size={18} /></div>
